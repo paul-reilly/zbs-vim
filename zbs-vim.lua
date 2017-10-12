@@ -85,6 +85,7 @@ local function isModeVisual(mode)
 end
 
 local function setMode(mode, overtype)
+  if not curEditor then editMode = mode return end
   if isModeVisual(mode) and isModeVisual(editMode) then
     editMode = kEditMode.normal
     curEditor:SetEmptySelection(curEditor:GetCurrentPos())
@@ -226,10 +227,10 @@ local commandsNormal = {
   ["y"]       = function(ed) if hasSelection(ed) then
                                ed:Copy() ; ed:SetEmptySelection(ed:GetCurrentPos()) 
                              end
-                             if isModeVisual(editMode) then editMode = kEditMode.normal end
+                             if isModeVisual(editMode) then setMode(kEditMode.normal) end
                              end,
   ["c"]       = function(ed) if isModeVisual(editMode) then 
-                               executeCommandNormal("x", ed) ; editMode = kEditMode.insert; 
+                               executeCommandNormal("x", ed) ; setMode(kEditMode.insert); 
                                ed:SetEmptySelection(ed:GetCurrentPos()) end ; end,
   ["yy"]      = function(ed) yank(ed) end,
   ["p"]       = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do ed:Paste() end ; end,
@@ -316,7 +317,7 @@ return {
   version = "0.1",
   
   onRegister = function(self)
-    editMode = kEditMode.insert
+    setMode(kEditMode.insert)
     -- currently need to override ZBS shortcuts here
     --origCtrlReg = 
     ide:SetHotKey(function() curEditor:Redo() end, "Ctrl+R")
@@ -371,7 +372,7 @@ return {
         end
       elseif keyNum == 27 then
         resetCurrentVars()
-        editMode = kEditMode.normal
+        setMode(kEditMode.normal)
       else
         curCommand = curCommand .. key
         ide:Print(curCommand)
