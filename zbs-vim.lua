@@ -17,12 +17,12 @@
 --
 --      normal mode:
 --             [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p
---             $, ^, 0, gg, gt, gT, z., zz, d^, d0, d$, c^, c0, c$
+--             $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$
 --             i, I, a, A (not stored in buffers for repeating)
 --             # - opens current document in real instance of Vim
 --
 --      visual mode:
---             y, x
+--             y, x, c
 --
 --      command line mode:
 --             w, q
@@ -228,11 +228,16 @@ local commandsNormal = {
                              end
                              if isModeVisual(editMode) then editMode = kEditMode.normal end
                              end,
+  ["c"]       = function(ed) if isModeVisual(editMode) then 
+                               executeCommandNormal("x", ed) ; editMode = kEditMode.insert; 
+                               ed:SetEmptySelection(ed:GetCurrentPos()) end ; end,
   ["yy"]      = function(ed) yank(ed) end,
   ["p"]       = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do ed:Paste() end ; end,
   ["u"]       = function(ed) for i=1, math.max(curNumber, 1) do ed:Undo() end ; end,
   ["zz"]      = function(ed) ed:VerticalCentreCaret() end,
   ["z."]      = function(ed) ed:VerticalCentreCaret() end,
+  ["zt"]      = function(ed) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
+  ["zb"]      = function(ed) ed:SetFirstVisibleLine(math.max(0, ed:GetCurrentLine() - ed:LinesOnScreen() + 1)) ; end,
   ["cc"]      = function(ed) ed:BeginUndoAction()
                              if curNumber > 1 then curNumber = curNumber - 1 ; executeCommandNormal("dd", ed, true) end
                              ed:SetCurrentPos(ed:PositionFromLine(ed:GetCurrentLine())) 
