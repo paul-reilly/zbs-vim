@@ -256,17 +256,26 @@ local commandsNormal = {
 }
 
 -- this remains local because of forward declaration
--- dontEndUndo passed to any relevant function in case we
+-- noUndo passed to any relevant function in case we
 -- want to extend 
 function executeCommandNormal(key, editor, noUndo)
+  local retVal
   if commandsNormal[key] ~= nil then
-    commandsNormal[key](editor, noUndo)
+    retVal = commandsNormal[key](editor, noUndo)
     if key ~= "." then
       lastNumber = curNumber
       lastCommand = key
     end
   end
   resetCurrentVars()
+  -- retVal could be nil, false or true so
+  return (retVal == true and true or false)
+end
+
+local function doesCommandExpectMotionElement(cmdKey)
+  if isModeVisual(editMode) then return false end
+  return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
+         cmdKey == "y" or cmdKey == "g"
 end
 
 local function eventKeyNumToChar(keyNum)
@@ -386,8 +395,7 @@ return {
     end
     
     -- check for commands with second, motion parameters
-    if curCommand:len() == 0 and (key == "g" or key == "z" or key == "d" or key == ":" or
-              (key == "y" and not isModeVisual(editMode)) or key == "c") then 
+    if curCommand:len() == 0 and doesCommandExpectMotionElement(key) then 
       curCommand = key
       return false -- wait for 2nd key
     else      
@@ -401,8 +409,7 @@ return {
     if wx.wxGetKeyState(wx.WXK_ALT) then key = key .. "+Alt" end
     
     ide:Print(key)
-    executeCommandNormal(key, editor)
-    return false
+    return executeCommandNormal(key, editor)
   end,
   
   -- caret setting is per document/editor, but our Vim mode is global
