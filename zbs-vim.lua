@@ -177,6 +177,8 @@ end
 local executeCommandNormal -- forward declaration required for locals only
 
 local commandsNormal = {
+  ["PGUP"]    = function(ed) callExtendableFunc(ed, "PageUp") end,
+  ["PGDOWN"]  = function(ed) callExtendableFunc(ed, "PageDown") end,
   ["END"]     = function(ed) callExtendableFunc(ed, "LineEnd") end,
   ["$"]       = function(ed) callExtendableFunc(ed, "LineEnd") end,
   ["HOME"]    = function(ed) callExtendableFunc(ed, "Home") end,
