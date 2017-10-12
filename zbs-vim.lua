@@ -180,7 +180,7 @@ local commandsNormal = {
   ["END"]     = function(ed) callExtendableFunc(ed, "LineEnd") end,
   ["$"]       = function(ed) callExtendableFunc(ed, "LineEnd") end,
   ["HOME"]    = function(ed) callExtendableFunc(ed, "Home") end,
-  ["^"]       = function(ed) callExtendableFunc(ed, "Home") end,
+  ["^"]       = function(ed) callExtendableFunc(ed, "VCHome") end,
   ["v"]       = function(ed) setMode(kEditMode.visual, false) end,
   ["V"]       = function(ed) setMode(kEditMode.visualLine, false) end,
   ["v+Ctrl"]  = function(ed) setMode(kEditMode.visualBlock, false) end,
@@ -378,7 +378,7 @@ return {
         if tonumber(key) < 10 then
           -- lone zero is line start command
           if curNumber == 0 and tonumber(key) == 0 then
-            executeCommandNormal("^", editor)
+            executeCommandNormal("HOME", editor)
           else
             curNumber = (curNumber * 10) + tonumber(key)
           end
