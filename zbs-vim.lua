@@ -58,8 +58,6 @@ local editMode = nil
 -- to avoid pasting stuff 100,000 times or whatever
 local _MAX_REPS = 50 
 local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
-local markers = {}
-local visualModeStartPos = nil
 
 local function resetCurrentVars()
   curNumber = 0
@@ -91,7 +89,6 @@ local function setMode(mode, overtype)
     editMode = kEditMode.normal
     curEditor:SetEmptySelection(curEditor:GetCurrentPos())
   else
-    if isModeVisual(mode) then visualModeStartPos = curEditor:GetCurrentPos() end
     if mode == kEditMode.visualBlock then 
       -- this always jumps to line 0 for some reason
       local origPos = curEditor:GetCurrentPos()
@@ -186,7 +183,6 @@ local commandsNormal = {
   ["v"]       = function(ed) setMode(kEditMode.visual, false) end,
   ["V"]       = function(ed) setMode(kEditMode.visualLine, false) end,
   ["v+Ctrl"]  = function(ed) setMode(kEditMode.visualBlock, false) end,
-  ["V+Ctrl"]  = function(ed) setMode(kEditMode.visualBlock, false) end,
   ["i"]       = function(ed) setMode(kEditMode.insert, false) end,
   ["I"]       = function(ed) ed:Home() ; setMode(kEditMode.insert, false) end,
   ["a"]       = function(ed) setMode(kEditMode.insert, false) end,
