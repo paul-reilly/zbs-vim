@@ -405,8 +405,13 @@ local function validateAndExecuteCommand(editor, cmd)
         return true 
       elseif not doesCommandExpectMotionElement(cmd.cmdchar) then
         editor:BeginUndoAction()
-        _DBG("Performed from old table!")
-        executeCommandNormal(cmd.prechar .. cmd.cmdchar, editor)
+        if operators[cmd.cmdchar] then
+          executeCommand(cmd, curNumber, editor, nil, false, false)
+        else
+          _DBG("Performed from old table!")
+          _DBG("---"..cmd.prechar.. cmd.cmdchar)
+          executeCommandNormal(cmd.prechar .. cmd.cmdchar, editor)
+        end
         editor:EndUndoAction()
         return true
       end
