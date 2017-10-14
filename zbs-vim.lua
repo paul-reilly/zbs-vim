@@ -31,6 +31,13 @@
 --      '-' remapped as '$' so '0' = HOME, '-' = END
 --
 -----------------------------------------------------------------------------------------------------
+local DEBUG = false
+
+local function _DBG(...)
+  if DEBUG then 
+    local msg = "" ; for k,v in ipairs{...} do ; msg = msg .. tostring(v) .. "\t" ; end ; ide:Print(msg)
+  end
+end
 
 -- remap any keys you want here
 local keyRemap = { ["-"] = "$" }             
