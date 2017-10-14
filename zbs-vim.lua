@@ -533,7 +533,11 @@ return {
     end
     if cmd.cmdchar == "" then 
       if key == 'g' then 
-        cmd.prechar = key
+        if cmd.prechar == "" then 
+          cmd.prechar = key
+        else
+          cmd.cmdchar = key
+        end
       else
         cmd.cmdchar = key 
       end
