@@ -383,7 +383,8 @@ local function executeCommand(cmd, cmdReps, editor, motionReps, linewise, doMoti
   editor:BeginUndoAction()
   for i = 1, cmdReps do
     if doMotion then motions[cmd.nchar](editor, true, motionReps) end
-    operators[cmd.cmdchar](editor, linewise)
+    local final = i == cmdReps and true or false
+    operators[cmd.cmdchar](editor, linewise, final)
   end
   editor:EndUndoAction()
 end
