@@ -517,7 +517,7 @@ return {
       if cmd.cmdchar == "" then
         -- lone zero is line start command
         if cmd.count1 == 0 and tonumber(key) == 0 then
-          executeCommandNormal("HOME", editor)
+          motions["HOME"](editor)
           cmd = newCommand()
         else
           cmd.count1 = cmd.count1 * 10 + tonumber(key)
