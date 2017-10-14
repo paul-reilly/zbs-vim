@@ -117,7 +117,6 @@ end
 local function isModeVisual(mode)
   return ( mode == kEditMode.visual or mode == kEditMode.visualBlock or
          mode == kEditMode.visualLine )
-  --return ( mode >= kEditMode.visual and mode <= kEditMode.visualLine )
 end
 
 local function setMode(mode, overtype)
@@ -152,11 +151,9 @@ local function callExtendableFunc(obj, name, callExtend, reps)
     extend = isModeVisual(editMode) and "Extend" or ""
   end
   reps = reps ~= nil and reps or math.max(curNumber, 1)
-  curEditor:BeginUndoAction()
   for i = 1, reps do
     obj[name .. extend](obj)
   end
-  curEditor:EndUndoAction()  
 end
 
 local function normOrVisFunc(obj, norm, vis)
@@ -164,11 +161,9 @@ local function normOrVisFunc(obj, norm, vis)
     obj[vis](obj)
   else
     local reps = math.max(curNumber, 1)
-    curEditor:BeginUndoAction()
     for i = 1, reps do
       obj[norm](obj)
     end
-    curEditor:EndUndoAction()
   end
 end
 
@@ -470,8 +465,7 @@ return {
     if keyNum >= 306 and keyNum <= 308 then return false end 
     
     key = eventKeyNumToChar(keyNum)
-    
-    
+        
     -----------------------------------------------------------------
     --         Command Line Mode        
     if editMode == kEditMode.commandLine then
