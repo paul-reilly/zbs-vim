@@ -172,15 +172,20 @@ local function normOrVisFunc(obj, norm, vis)
   end
 end
 
-local function deleteLines(noUndo)
-  local lineNumber, start, len
-  local reps = math.max(curNumber, 1)
-  if noUndo ~= true then curEditor:BeginUndoAction() end
-  for i = 1, reps do
-    lineNumber = curEditor:GetCurrentLine() --curEditor:LineFromPosition(curEditor:GetCurrentPos())
-    curEditor:LineCut()
+-- uses wxSTC_FIND_.. constants 
+local function searchForAndGoto(ed, text, searchBackwards, minPos)
+  local flags = wxstc.wxSTC_FIND_WHOLEWORD
+  if minPos == nil then minPos= ed:GetCurrentPos() end
+  local maxPos = searchBackwards and 0 or ed:GetLength()
+  local pos = ed:FindText(minPos, maxPos, text, flags)
+  if pos ~= wxstc.wxSTC_INVALID_POSITION then
+    if pos == minPos then 
+      -- we're already at the beginning of the text, search again from after text
+      searchForAndGoto(ed, text, searchBackwards, minPos + #text) 
+      return 
+    end
+    ed:GotoPos(pos)
   end
-  if noUndo ~= true then curEditor:EndUndoAction() end
 end
 
 local function yank(ed)
