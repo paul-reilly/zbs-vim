@@ -293,16 +293,16 @@ local commandsNormal = {
                                ID.NOTEBOOKTABNEXT)) end,
   ["gT"]      = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
                                ID.NOTEBOOKTABPREV)) end,
-  ["G"]       = function(ed) if curNumber > 0 then
+  ["G"]       = function(ed) if curNumber > 1 then
                                local line = ed:GetCurrentLine()
                                local relative = curNumber - 1 - line
-                               curNumber = math.abs(relative)
+                               local reps = math.abs(relative)
                                if relative <= 0 then
-                                 executeCommandNormal("k", ed)
+                                 motions["k"](ed, nil, reps)
                                else
-                                 executeCommandNormal("j", ed)
+                                 motions["j"](ed, nil, reps)
                                end
-                               executeCommandNormal("^", ed)
+                               motions["HOME"](ed, nil)
                              else
                                callExtendableFunc(ed, "DocumentEnd")
                              end ; end,
