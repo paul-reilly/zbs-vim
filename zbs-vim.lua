@@ -265,19 +265,20 @@ local function restoreCaretPos(ed, cmd)
     ed:SetCurrentPos(cmd.origPos)
   end
 end
-    
+
+local executeCommandNormal
+
 local operators = {
   ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Cut() end ; end,
-  ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed) end ; 
-                                         if final then ed:Cut() ; setMode(kEditMode.insert) end ; end,
+  ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
+                                         if final then ed:Cut() ; executeCommandNormal("O", ed) end ; end,
   ["y"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Copy() cancelSelection(ed) end ; end,
   ["x"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Cut() ; cancelSelection(ed) end ; end
 }  
 
-local executeCommandNormal -- forward declaration required for locals only
 
 local commandsNormal = { 
   ["v"]       = function(ed) setMode(kEditMode.visual, false) end,
