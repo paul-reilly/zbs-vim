@@ -427,11 +427,11 @@ end
 -----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
 return {
-  name = "zbs-vim",
+  name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
   version = "0.2",
-  dependencies = "1.60", --"1.61", - actually 1.61
+  dependencies = "1.61",
   
   onRegister = function(self)
     setMode(kEditMode.insert)
