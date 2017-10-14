@@ -54,11 +54,10 @@ local shiftMap = {["0"] = ")", ["1"] = "!", ["2"]  = "\"", ["3"] = "£", ["4"] =
 local keyMap = {["8"] = "BS",     ["9"] = "TAB",    ["92"]  = "\\",   ["127"] = "DEL",     ["312"] = "END",     
                 ["313"] = "HOME", ["314"] = "LEFT", ["315"] = "UP",   ["316"] = "RIGHT",   ["317"] = "DOWN",
                 ["366"] = "PGUP", ["367"] = "PGDOWN"}
-              
 
 -- visualBlock and visualLine are not very useful at the moment
-local kEditMode = { normal = 0, visual = 1, visualBlock = 2, visualLine = 3, 
-                    insert = 4, commandLine = 5 }
+local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", visualLine = "Visual - Line", 
+                    insert = "Insert - ZeroBrane", commandLine = "Command Line" }
 
 local editMode = nil
 -- bound repetitions of some functions to this value
@@ -88,7 +87,9 @@ local function setCaret(editor)
 end
 
 local function isModeVisual(mode)
-  return ( mode >= kEditMode.visual and mode <= kEditMode.visualLine )
+  return ( mode == kEditMode.visual or mode == kEditMode.visualBlock or
+         mode == kEditMode.visualLine )
+  --return ( mode >= kEditMode.visual and mode <= kEditMode.visualLine )
 end
 
 local function setMode(mode, overtype)
@@ -108,6 +109,7 @@ local function setMode(mode, overtype)
     end
     editMode = mode
   end
+  ide:SetStatus("Vim mode: "..mode)
   setCaret(curEditor)
   curEditor:SetOvertype(overtype)
 end
