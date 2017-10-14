@@ -145,12 +145,16 @@ end
 -- some wxStyledTextCtrl methods have Extend versions
 -- so this saves a bit of duplication for working
 -- in visual mode
-local function callExtendableFunc(obj, name, ...)
-  local extend = isModeVisual(editMode) and "Extend" or ""
-  local reps = math.max(curNumber, 1)
+local function callExtendableFunc(obj, name, callExtend, reps)
+  if callExtend ~= nil then
+    extend = callExtend == true and "Extend" or ""
+  else
+    extend = isModeVisual(editMode) and "Extend" or ""
+  end
+  reps = reps ~= nil and reps or math.max(curNumber, 1)
   curEditor:BeginUndoAction()
   for i = 1, reps do
-    obj[name .. extend](obj, ...)
+    obj[name .. extend](obj)
   end
   curEditor:EndUndoAction()  
 end
