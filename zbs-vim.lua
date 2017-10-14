@@ -241,9 +241,18 @@ local motions = {
 local function selectCurrentLine(ed, incLineEnd)
   local line = ed:GetCurrentLine()
   local lineStart = ed:PositionFromLine(line)
-  ed:SetSelectionStart(lineStart)
   local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) or ed:GetLineEndPosition(line)
-  ed:SetSelectionEnd(lineEnd)
+  if not hasSelection(ed) then 
+    ed:SetSelectionStart(lineStart)
+    ed:SetSelectionEnd(lineEnd)
+  else
+    -- extend existing selection by line
+    if ed:GetSelectionStart() < lineStart then
+      ed:SetSelectionEnd(lineEnd)
+    else
+      ed:SetSelectionStart(lineStart)
+    end
+  end
 end
 
 local function cancelSelection(ed)
@@ -257,12 +266,15 @@ local function restoreCaretPos(ed, cmd)
   end
 end
     
-
 local operators = {
-  ["d"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed, true) end ; ed:Cut() end,
-  ["c"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed) end ; ed:Cut() ; setMode(kEditMode.insert) end,
-  ["y"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed, true) end ; ed:Copy() ; cancelSelection(ed) end,
-  ["x"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed, true) end ; ed:Cut() ; cancelSelection(ed) end
+  ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
+                                         if final then ed:Cut() end ; end,
+  ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed) end ; 
+                                         if final then ed:Cut() ; setMode(kEditMode.insert) end ; end,
+  ["y"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
+                                         if final then ed:Copy() cancelSelection(ed) end ; end,
+  ["x"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
+                                         if final then ed:Cut() ; cancelSelection(ed) end ; end
 }  
 
 local executeCommandNormal -- forward declaration required for locals only
