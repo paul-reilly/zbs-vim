@@ -65,9 +65,37 @@ local editMode = nil
 local _MAX_REPS = 50 
 local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
 
+-- rough copy of cmd structure used by neovim to keep things extendable
+local function newCommand(searchbuf)
+  local cmd = {
+    opargs = nil,            -- operator arguments
+    prechar = "",            -- prefix character (optional, always 'g')
+    cmdchar = "",            -- command character
+    nchar = "",              -- next command character (optional)
+    ncharC1 = "",            -- first composing character (optional) 
+    ncharC2 = "",            -- second composing character (optional)
+    extrachar = "",          -- yet another character (optional) 
+    opcount = 0,             -- count before an operator
+    count1 = 0,              -- count before command, default 0
+    count2 = 0,              -- count before command, default 1
+    arg = "",                -- extra argument from nv_cmds[]
+    retval = nil,            -- return: CA_* values
+    searchbuf = {},          -- return: pointer to search pattern or NULL
+    origPos = nil            -- pos in document before execution
+  }
+  return cmd
+end
+
+local cmd -- initialised in onRegister
+local cmdLast
+
 local function resetCurrentVars()
   curNumber = 0
   curCommand = ""
+end
+
+function table.clone(org)
+  return {table.unpack(org)}
 end
 
 -- must have vim in path
@@ -181,15 +209,61 @@ local function parseAndExecuteCommandLine(editor)
   resetCurrentVars()
 end
 
+local executeMotion
+
+local motions = {
+  ["PGUP"]    = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
+  ["PGDOWN"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
+  ["}"]       = function(ed, extend, reps) callExtendableFunc(ed, "ParaDown" ,extend, reps) end,
+  ["{"]       = function(ed, extend, reps) callExtendableFunc(ed, "ParaUp"   ,extend, reps) end,
+  ["END"]     = function(ed, extend, reps) callExtendableFunc(ed, "LineEnd"  ,extend, reps) end,
+  ["$"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineEnd"  ,extend, reps) end,
+  ["HOME"]    = function(ed, extend, reps) callExtendableFunc(ed, "Home"     ,extend, reps) end,
+  ["0"]       = function(ed, extend, reps) callExtendableFunc(ed, "Home"     ,extend, reps) end,
+  ["^"]       = function(ed, extend, reps) callExtendableFunc(ed, "VCHome"   ,extend, reps) end,
+  ["b"]       = function(ed, extend, reps) callExtendableFunc(ed, "WordLeft" ,extend, reps) end,
+  ["w"]       = function(ed, extend, reps) callExtendableFunc(ed, "WordRight",extend, reps) end,
+  ["h"]       = function(ed, extend, reps) callExtendableFunc(ed, "CharLeft" ,extend, reps) end,
+  ["BS"]      = function(ed, extend, reps) callExtendableFunc(ed, "CharLeft" ,extend, reps) end, 
+  ["LEFT"]    = function(ed, extend, reps) callExtendableFunc(ed, "CharLeft" ,extend, reps) end, 
+  ["j"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineDown" ,extend, reps) end,
+  ["DOWN"]    = function(ed, extend, reps) callExtendableFunc(ed, "LineDown" ,extend, reps) end,
+  ["k"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineUp"   ,extend, reps) end,
+  ["UP"]      = function(ed, extend, reps) callExtendableFunc(ed, "LineUp"   ,extend, reps) end,
+  ["l"]       = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end,
+  ["RIGHT"]   = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end
+}
+
+local function selectCurrentLine(ed, incLineEnd)
+  local line = ed:GetCurrentLine()
+  local lineStart = ed:PositionFromLine(line)
+  ed:SetSelectionStart(lineStart)
+  local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) or ed:GetLineEndPosition(line)
+  ed:SetSelectionEnd(lineEnd)
+end
+
+local function cancelSelection(ed)
+  ed:SetEmptySelection(ed:GetCurrentPos())
+  setMode(kEditMode.normal)
+end
+
+local function restoreCaretPos(ed, cmd)
+  if cmd.origPos ~= nil then
+    ed:SetCurrentPos(cmd.origPos)
+  end
+end
+    
+
+local operators = {
+  ["d"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed, true) end ; ed:Cut() end,
+  ["c"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed) end ; ed:Cut() ; setMode(kEditMode.insert) end,
+  ["y"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed, true) end ; ed:Copy() ; cancelSelection(ed) end,
+  ["x"]  = function(ed, linewise, reps) if linewise then selectCurrentLine(ed, true) end ; ed:Cut() ; cancelSelection(ed) end
+}  
+
 local executeCommandNormal -- forward declaration required for locals only
 
-local commandsNormal = {
-  ["PGUP"]    = function(ed) callExtendableFunc(ed, "PageUp") end,
-  ["PGDOWN"]  = function(ed) callExtendableFunc(ed, "PageDown") end,
-  ["END"]     = function(ed) callExtendableFunc(ed, "LineEnd") end,
-  ["$"]       = function(ed) callExtendableFunc(ed, "LineEnd") end,
-  ["HOME"]    = function(ed) callExtendableFunc(ed, "Home") end,
-  ["^"]       = function(ed) callExtendableFunc(ed, "VCHome") end,
+local commandsNormal = { 
   ["v"]       = function(ed) setMode(kEditMode.visual, false) end,
   ["V"]       = function(ed) setMode(kEditMode.visualLine, false) end,
   ["v+Ctrl"]  = function(ed) setMode(kEditMode.visualBlock, false) end,
@@ -216,58 +290,30 @@ local commandsNormal = {
                              else
                                callExtendableFunc(ed, "DocumentEnd")
                              end ; end,
-  ["b"]       = function(ed) callExtendableFunc(ed, "WordLeft") end,
-  ["w"]       = function(ed) callExtendableFunc(ed, "WordRight") end,
-  ["h"]       = function(ed) callExtendableFunc(ed, "CharLeft") end,
-  ["BS"]      = function(ed) callExtendableFunc(ed, "CharLeft") end, 
-  ["LEFT"]    = function(ed) callExtendableFunc(ed, "CharLeft") end, 
-  ["j"]       = function(ed) callExtendableFunc(ed, "LineDown") end,
-  ["DOWN"]    = function(ed) callExtendableFunc(ed, "LineDown") end,
-  ["k"]       = function(ed) callExtendableFunc(ed, "LineUp") end,
-  ["UP"]      = function(ed) callExtendableFunc(ed, "LineUp") end,
-  ["l"]       = function(ed) callExtendableFunc(ed, "CharRight") end,
-  ["RIGHT"]   = function(ed) callExtendableFunc(ed, "CharRight") end,
   ["x"]       = function(ed) normOrVisFunc(ed, "DeleteBack", "Cut") end,
   ["o"]       = function(ed) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
                              ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
   ["O"]       = function(ed) ed:LineUp()
                              ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
                              ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
-  ["y"]       = function(ed) if hasSelection(ed) then
-                               ed:Copy() ; ed:SetEmptySelection(ed:GetCurrentPos()) 
-                             end
-                             if isModeVisual(editMode) then setMode(kEditMode.normal) end
-                             end,
-  ["c"]       = function(ed) if isModeVisual(editMode) then 
-                               executeCommandNormal("x", ed) ; setMode(kEditMode.insert); 
-                               ed:SetEmptySelection(ed:GetCurrentPos()) end ; end,
-  ["yy"]      = function(ed) yank(ed) end,
+  ["Y"]       = function(ed) yank(ed) end,
   ["p"]       = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do ed:Paste() end ; end,
   ["u"]       = function(ed) for i=1, math.max(curNumber, 1) do ed:Undo() end ; end,
   ["zz"]      = function(ed) ed:VerticalCentreCaret() end,
   ["z."]      = function(ed) ed:VerticalCentreCaret() end,
   ["zt"]      = function(ed) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
   ["zb"]      = function(ed) ed:SetFirstVisibleLine(math.max(0, ed:GetCurrentLine() - ed:LinesOnScreen() + 1)) ; end,
-  ["cc"]      = function(ed) ed:BeginUndoAction()
-                             if curNumber > 1 then curNumber = curNumber - 1 ; executeCommandNormal("dd", ed, true) end
-                             ed:SetCurrentPos(ed:PositionFromLine(ed:GetCurrentLine())) 
-                             executeCommandNormal("d$", ed) ; executeCommandNormal("i", ed) 
-                             ed:EndUndoAction() ; end,
-  ["c$"]      = function(ed) executeCommandNormal("d$", ed) ; executeCommandNormal("i", ed) ; end,
-  ["cw"]      = function(ed) executeCommandNormal("dw", ed) ; executeCommandNormal("i", ed) ; end,
-  ["cb"]      = function(ed) executeCommandNormal("db", ed) ; executeCommandNormal("i", ed) ; end,
-  ["c^"]      = function(ed) executeCommandNormal("d^", ed) ; executeCommandNormal("i", ed) ; end,
-  ["c0"]      = function(ed) executeCommandNormal("d^", ed) ; executeCommandNormal("i", ed) ; end,
-  ["dd"]      = function(ed, noUndo) deleteLines(noUndo) end,
-  ["d$"]      = function(ed) ed:DeleteRange(ed:GetCurrentPos(), ed:GetLineEndPosition(ed:GetCurrentLine()) - ed:GetCurrentPos()) ; end,
-  ["d^"]      = function(ed) local pos = ed:PositionFromLine(ed:GetCurrentLine()) ; ed:DeleteRange(pos, ed:GetCurrentPos() - pos) ; end,
-  ["d0"]      = function(ed) local pos = ed:PositionFromLine(ed:GetCurrentLine()) ; ed:DeleteRange(pos, ed:GetCurrentPos() - pos) ; end,
-  ["dw"]      = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do ed:DelWordRight() end ; end,
-  ["db"]      = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do ed:DelWordLeft() end ; end,
   ["r+Ctrl"]  = function(ed) ed:Redo() end,
   ["."]       = function(ed) curNumber = lastNumber ; executeCommandNormal(lastCommand, ed) end,
   ["DEL"]     = function(ed) local pos = ed:GetCurrentPos() ; ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end,
   ["#"]       = function(ed) openRealVim(ed) end,
+}
+
+
+local commandsVisual = {
+  ["c"] = function(ed, cmd) end,
+  ["x"] = function(ed, cmd) end,
+  ["y"] = function(ed, cmd) end
 }
 
 -- this remains local because of forward declaration
@@ -290,7 +336,7 @@ end
 local function doesCommandExpectMotionElement(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
-         cmdKey == "y" or cmdKey == "g"
+         cmdKey == "y"
 end
 
 local function eventKeyNumToChar(keyNum)
@@ -317,19 +363,73 @@ local function eventKeyNumToChar(keyNum)
   return (keyMap[tostring(keyNum)] or tostring(keyNum))
 end
 
+local function executeCommand(cmd, cmdReps, editor, motionReps, linewise, doMotion)
+  editor:BeginUndoAction()
+  for i = 1, cmdReps do
+    if doMotion then motions[cmd.nchar](editor, true, motionReps) end
+    operators[cmd.cmdchar](editor, linewise)
+  end
+  editor:EndUndoAction()
+end
+
+local function validateAndExecuteCommand(editor, cmd)
+  _DBG("cmd.prechar: ", cmd.prechar)
+  _DBG("cmd.count1: ", cmd.count1)
+  _DBG("cmd.cmdchar: ", cmd.cmdchar)
+  _DBG("cmd.count2: ", cmd.count2)
+  _DBG("cmd.nchar: ", cmd.nchar)
+  if cmd.cmdchar ~= "" then
+    curNumber = math.max(cmd.count1, 1)
+    if cmd.nchar == "" then
+      if motions[cmd.cmdchar] then 
+        editor:BeginUndoAction()
+        motions[cmd.cmdchar](editor, false, curNumber)
+        editor:EndUndoAction()
+        return true 
+      elseif not doesCommandExpectMotionElement(cmd.cmdchar) then
+        editor:BeginUndoAction()
+        _DBG("Performed from old table!")
+        executeCommandNormal(cmd.prechar .. cmd.cmdchar, editor)
+        editor:EndUndoAction()
+        return true
+      end
+    else
+      -- we have an operator and a motion or linewise (eg dd, cc)
+      if operators[cmd.cmdchar] then
+        if motions[cmd.nchar] then
+          executeCommand(cmd, curNumber, editor, math.max(cmd.count2, 1), false, true)
+          return true
+        else
+          if cmd.nchar == cmd.cmdchar then
+            executeCommand(cmd, curNumber, editor, nil, true, false)
+            return true
+          end
+        end
+      end
+      executeCommandNormal(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
+      _DBG("Performed from old table!")
+      return true
+    end
+  end
+    
+  return false
+end
+
 -----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
 return {
   name = "zbs-vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
-  version = "0.1",
+  version = "0.2",
+  dependencies = "1.60", --"1.61", - actually 1.61
   
   onRegister = function(self)
     setMode(kEditMode.insert)
     -- currently need to override ZBS shortcuts here
     --origCtrlReg = 
     ide:SetHotKey(function() curEditor:Redo() end, "Ctrl+R")
+    cmd = newCommand()
   end,
 
   onEditorKeyDown = function(self, editor, event)
@@ -393,38 +493,44 @@ return {
     -- not command line, remap key if required
     if keyRemap[key] then key = keyRemap[key] end
     
-    -- handle numbers at start of command
-    if tonumber(key) then
-      -- don't add to total if command is underway
-      if #curCommand == 0 then
-        if tonumber(key) < 10 then
-          -- lone zero is line start command
-          if curNumber == 0 and tonumber(key) == 0 then
-            executeCommandNormal("HOME", editor)
-          else
-            curNumber = (curNumber * 10) + tonumber(key)
-          end
-          return false
+    -----------------------------------------------------------------
+    --    Normal/Visual Modes 
+    if keyNum == 27 then cmd = newCommand() return false end
+    -- handle numbers
+    if tonumber(key) and tonumber(key) < 10 then
+      if cmd.cmdchar == "" then
+        -- lone zero is line start command
+        if cmd.count1 == 0 and tonumber(key) == 0 then
+          executeCommandNormal("HOME", editor)
+          cmd = newCommand()
+        else
+          cmd.count1 = cmd.count1 * 10 + tonumber(key)
+        end
+      else
+        if cmd.count2 == 0 and tonumber(key) == 0 then
+          key = "HOME"
+        else
+          cmd.count2 = cmd.count2 * 10 + tonumber(key)
         end
       end
+      if key ~= "HOME" then return false end
     end
-    
-    -- check for commands with second, motion parameters
-    if curCommand:len() == 0 and doesCommandExpectMotionElement(key) then 
-      curCommand = key
-      return false -- wait for 2nd key
-    else      
-      if curCommand:len() == 1 then
-        -- add to command string and continue to execution
-        key = curCommand .. key
+    if cmd.cmdchar == "" then 
+      if key == 'g' then 
+        cmd.prechar = key
+      else
+        cmd.cmdchar = key 
       end
+    else
+      cmd.nchar = key
     end
-
-    if wx.wxGetKeyState(wx.WXK_CONTROL) then key = key .. "+Ctrl" end
-    if wx.wxGetKeyState(wx.WXK_ALT) then key = key .. "+Alt" end
+    if validateAndExecuteCommand(editor, cmd) then 
+      cmdLast = table.clone(cmd)
+      cmd = newCommand()
+    end
     
-    ide:Print(key)
-    return executeCommandNormal(key, editor)
+    return false
+    -----------------------------------------------------------------
   end,
   
   -- caret setting is per document/editor, but our Vim mode is global
