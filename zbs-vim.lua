@@ -459,7 +459,7 @@ return {
       if editMode ~= kEditMode.commandLine and keyNum == 59 and wx.wxGetKeyState(wx.WXK_SHIFT) then
         setMode(kEditMode.commandLine)
         ide:GetOutputNotebook().errorlog:Erase()
-        ide:Print(":")
+        ide:SetStatus(":")
         resetCurrentVars()
         curCommand = ":"
         return false
@@ -484,7 +484,7 @@ return {
       elseif key == "BS" then
         if #curCommand > 1 then
           curCommand = curCommand:sub(1, #curCommand - 1)
-          ide:Print(curCommand)
+          ide:SetStatus(curCommand)
         else
           setMode(kEditMode.normal)
         end
@@ -493,7 +493,7 @@ return {
         setMode(kEditMode.normal)
       else
         curCommand = curCommand .. key
-        ide:Print(curCommand)
+        ide:SetStatus(curCommand)
       end
       return false
     end
