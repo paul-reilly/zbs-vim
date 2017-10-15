@@ -59,6 +59,11 @@ local keyMap = {["8"] = "BS",     ["9"] = "TAB",    ["92"]  = "\\",   ["127"] = 
 local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", visualLine = "Visual - Line", 
                     insert = "Insert - ZeroBrane", commandLine = "Command Line" }
 
+-- forward declarations of function variables
+local eventKeyNumToChar
+local executeCommandNormal
+local executeMotion
+
 local editMode = nil
 -- bound repetitions of some functions to this value
 -- to avoid pasting stuff 100,000 times or whatever
@@ -368,7 +373,8 @@ local function doesCommandExpectMotionElement(cmdKey)
          cmdKey == "y"
 end
 
-local function eventKeyNumToChar(keyNum)
+-- forward declaration at top of file
+function eventKeyNumToChar(keyNum)
   local number
   if keyNum >= 48 and keyNum <= 57 then
     number = keyNum - 48
