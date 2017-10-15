@@ -16,7 +16,7 @@
 --                                     --------
 --
 --      normal mode:
---             [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p
+--             [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p, {, }
 --             $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$
 --             i, I, a, A (not stored in buffers for repeating)
 --             # - opens current document in real instance of Vim
@@ -141,7 +141,6 @@ local function setMode(mode, overtype)
     end
     editMode = mode
     if editMode == kEditMode.normal then curEditor:SetEmptySelection(curEditor:GetCurrentPos()) end
-
   end
   ide:SetStatus("Vim mode: "..mode)
   setCaret(curEditor)
@@ -219,8 +218,6 @@ local function parseAndExecuteCommandLine(editor)
   end
   resetCurrentVars()
 end
-
-local executeMotion
 
 local motions = {
   ["PGUP"]    = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
