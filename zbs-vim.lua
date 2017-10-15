@@ -272,7 +272,10 @@ local operators = {
   ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Cut() end ; end,
   ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Cut() ; executeCommandNormal("O", ed) end ; end,
+                                         if final then 
+                                           ed:Cut() 
+                                           if linewise then executeCommandNormal("O", ed) end
+                                         end ; end,
   ["y"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Copy() cancelSelection(ed) end ; end,
   ["x"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
