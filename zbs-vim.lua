@@ -447,7 +447,7 @@ return {
   name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
-  version = "0.2",
+  version = "0.3",
   dependencies = "1.61",
   
   onRegister = function(self)
