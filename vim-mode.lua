@@ -281,15 +281,25 @@ local function restoreCaretPos(ed, cmd)
   end
 end
 
-local executeCommandNormal
+-- for change operator, to match Vim behaviour of only changing word
+-- and not trailing space
+local function moveCaretLeftPastSpaces(ed)
+  local char = ed:GetCharAt(ed:GetCurrentPos() - 1)
+  while char == 32 do
+    motions["h"](ed, true, 1)
+    char = ed:GetCharAt(ed:GetCurrentPos() - 1)
+  end
+end
 
 local operators = {
   ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Cut() end ; end,
   ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Cut() 
-                                           if linewise then executeCommandNormal("O", ed) 
-                                           else setMode(kEditMode.insert) end
+                                         if final then moveCaretLeftPastSpaces(ed) ; ed:Cut() 
+                                           if linewise then
+                                             executeCommandNormal("O", ed)
+                                           else 
+                                             setMode(kEditMode.insert) end
                                          end ; end,
   ["y"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Copy() cancelSelection(ed) end ; end,
