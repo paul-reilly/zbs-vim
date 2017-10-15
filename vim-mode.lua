@@ -307,7 +307,7 @@ local commandsNormal = {
                                ID.NOTEBOOKTABNEXT)) end,
   ["gT"]      = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
                                ID.NOTEBOOKTABPREV)) end,
-  ["G"]       = function(ed) if curNumber > 1 then
+  ["G"]       = function(ed) if curNumber > 0 then
                                local line = ed:GetCurrentLine()
                                local relative = curNumber - 1 - line
                                local reps = math.abs(relative)
@@ -394,9 +394,10 @@ end
 
 local function executeCommand(cmd, cmdReps, editor, motionReps, linewise, doMotion)
   editor:BeginUndoAction()
-  for i = 1, cmdReps do
+  local iters = math.max(cmdReps, 1)
+  for i = 1, iters do
     if doMotion then motions[cmd.nchar](editor, true, motionReps) end
-    local final = i == cmdReps and true or false
+    local final = i == iters and true or false
     operators[cmd.cmdchar](editor, linewise, final)
   end
   editor:EndUndoAction()
@@ -409,11 +410,11 @@ local function validateAndExecuteCommand(editor, cmd)
   _DBG("cmd.count2: ", cmd.count2)
   _DBG("cmd.nchar: ", cmd.nchar)
   if cmd.cmdchar ~= "" then
-    curNumber = math.max(cmd.count1, 1)
+    curNumber = cmd.count1
     if cmd.nchar == "" then
       if motions[cmd.cmdchar] then 
         editor:BeginUndoAction()
-        motions[cmd.cmdchar](editor, false, curNumber)
+        motions[cmd.cmdchar](editor, false, math.max(cmd.count1, 1))
         editor:EndUndoAction()
         return true 
       elseif not doesCommandExpectMotionElement(cmd.cmdchar) then
