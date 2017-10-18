@@ -1,41 +1,42 @@
---         MIT Copyright 2017 Paul Reilly (https://opensource.org/licenses/MIT)
---
---
---  ::::::::: :::::::::   ::::::::                :::     ::: ::::::::::: ::::    ::::  
---       :+:  :+:    :+: :+:    :+:               :+:     :+:     :+:     +:+:+: :+:+:+ 
---      +:+   +:+    +:+ +:+                      +:+     +:+     +:+     +:+ +:+:+ +:+ 
---     +#+    +#++:++#+  +#++:++#++ +#++:++#++:++ +#+     +:+     +#+     +#+  +:+  +#+ 
---    +#+     +#+    +#+        +#+                +#+   +#+      +#+     +#+       +#+ 
---   #+#      #+#    #+# #+#    #+#                 #+#+#+#       #+#     #+#       #+# 
---  ######### #########   ########                    ###     ########### ###       ### 
--- 
---               zbs-vim adds a useful subset of Vim-like editing to ZBS
---                  and the ability to open current document in Vim
---
---                                     Commands
---                                     --------
---
---      normal mode:
---             [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p, {, }
---             $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$
---             i, I, a, A (not stored in buffers for repeating)
---             # - opens current document in real instance of Vim
---
---      visual mode:
---             y, x, c
---
---      command line mode:
---             w, q
---
---
---      '-' remapped as '$' so '0' = HOME, '-' = END
---
+--            MIT Copyright 2017 Paul Reilly (https://opensource.org/licenses/MIT)
+--   
+--   
+--     ::::::::: :::::::::   ::::::::                :::     ::: ::::::::::: ::::    ::::  
+--          :+:  :+:    :+: :+:    :+:               :+:     :+:     :+:     +:+:+: :+:+:+ 
+--         +:+   +:+    +:+ +:+                      +:+     +:+     +:+     +:+ +:+:+ +:+ 
+--        +#+    +#++:++#+  +#++:++#++ +#++:++#++:++ +#+     +:+     +#+     +#+  +:+  +#+ 
+--       +#+     +#+    +#+        +#+                +#+   +#+      +#+     +#+       +#+ 
+--      #+#      #+#    #+# #+#    #+#                 #+#+#+#       #+#     #+#       #+# 
+--     ######### #########   ########                    ###     ########### ###       ### 
+--    
+--                  zbs-vim adds a useful subset of Vim-like editing to ZBS
+--                     and the ability to open current document in Vim
+--   
+--                                        Commands
+--                                        --------
+--   
+--         normal mode:
+--                [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p, {, }, f, F
+--                $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$
+--                i, I, a, A (not stored in buffers for repeating)
+--                # - opens current document in real instance of Vim
+--   
+--         visual mode:
+--                y, x, c
+--   
+--         command line mode:
+--                w, q
+--   
+--   
+--         '-' remapped as '$' so '0' = HOME, '-' = END
+--   
+--   
 -----------------------------------------------------------------------------------------------------
-local DEBUG = false
+local DEBUG = true
 
 local function _DBG(...)
   if DEBUG then 
-    local msg = "" ; for k,v in ipairs{...} do ; msg = msg .. tostring(v) .. "\t" ; end ; ide:Print(msg)
+    local msg = "" for k,v in ipairs{...} do msg = msg .. tostring(v) .. "\t" end ide:Print(msg)
   end
 end
 
@@ -51,24 +52,35 @@ local shiftMap = {["0"] = ")", ["1"] = "!", ["2"]  = "\"", ["3"] = "£", ["4"] =
                   ["/"] = "?"
 }
 
-local keyMap = {["8"] = "BS",     ["9"] = "TAB",    ["92"]  = "\\",   ["127"] = "DEL",     ["312"] = "END",     
-                ["313"] = "HOME", ["314"] = "LEFT", ["315"] = "UP",   ["316"] = "RIGHT",   ["317"] = "DOWN",
-                ["366"] = "PGUP", ["367"] = "PGDOWN"}
+local keyMap = {["8"] = "BS",     ["9"] = "TAB",     ["92"]  = "\\",   ["127"] = "DEL",     
+                ["312"] = "END",  ["313"] = "HOME",  ["314"] = "LEFT", ["315"] = "UP",   
+                ["316"] = "RIGHT",["317"] = "DOWN",  ["366"] = "PGUP", ["367"] = "PGDOWN"}
 
 -- visualBlock and visualLine are not very useful at the moment
-local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", visualLine = "Visual - Line", 
-                    insert = "Insert - ZeroBrane", commandLine = "Command Line" }
+local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", 
+                    visualLine = "Visual - Line", insert = "Insert - ZeroBrane", 
+                    commandLine = "Command Line" }
+
+-- for the Lua equivalent of brace matching with 'end's at some point
+local luaSectionKeywords = { ["local function"] = "local function", ["function"] = "function", 
+                             ["while"] = "while", ["for"] = "for", ["if"] = "if", 
+                             ["repeat"] = "repeat" }
 
 -- forward declarations of function variables
 local eventKeyNumToChar
 local executeCommandNormal
 local executeMotion
+local hasSelection
+local validateAndExecuteCommand
+local executeCommand
+
 
 local editMode = nil
 -- bound repetitions of some functions to this value
 -- to avoid pasting stuff 100,000 times or whatever
 local _MAX_REPS = 50 
 local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
+local selectionAnchor = 0
 
 -- rough copy of cmd structure used by neovim to keep things extendable
 local function newCommand(searchbuf)
@@ -93,6 +105,8 @@ end
 
 local cmd -- initialised in onRegister
 local cmdLast
+
+----------------------------------------------------------------------------------------------------
 
 local function resetCurrentVars()
   curNumber = 0
@@ -130,14 +144,19 @@ local function setMode(mode, overtype)
     editMode = kEditMode.normal
     curEditor:SetEmptySelection(curEditor:GetCurrentPos())
   else
-    if mode == kEditMode.visualBlock then 
-      -- this always jumps to line 0 for some reason
-      local origPos = curEditor:GetCurrentPos()
-      curEditor:SetSelectionStart(origPos)
-      curEditor:SetSelectionMode(wxstc.wxSTC_SEL_RECTANGLE)
-      curEditor:SetSelectionStart(origPos)
-    elseif mode == kEditMode.visual then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_STREAM)
-    elseif mode == kEditMode.visualLine then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
+    if isModeVisual(mode) then 
+      selectionAnchor = curEditor:GetCurrentPos()
+      curEditor:SetAnchor(curEditor:GetCurrentPos())
+      if mode == kEditMode.visualBlock then 
+        -- this works with mulitple selections
+        local pos = curEditor:GetCurrentPos()
+        curEditor:SetSelectionStart(origPos)
+        curEditor:SetSelectionMode(wxstc.wxSTC_SEL_RECTANGLE)
+        curEditor:SetRectangularSelectionAnchor(0)
+        curEditor:SetRectangularSelectionCaret(pos)
+      elseif mode == kEditMode.visual then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_STREAM)
+      elseif mode == kEditMode.visualLine then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
+      end
     end
     editMode = mode
     if editMode == kEditMode.normal then curEditor:SetEmptySelection(curEditor:GetCurrentPos()) end
@@ -173,37 +192,45 @@ local function normOrVisFunc(obj, norm, vis)
   end
 end
 
+local function gotoPosition(ed, pos)
+  if isModeVisual(editMode) then
+    if pos < selectionAnchor then
+      ed:SetSelectionStart(pos)
+      ed:SetSelectionEnd(selectionAnchor)
+      ed:SetAnchor(selectionAnchor)
+    else
+      ed:SetSelectionEnd(pos)
+    end
+    ed:SetCurrentPos(pos)
+  else
+    ed:GotoPos(pos)
+  end
+end
+
 -- uses wxSTC_FIND_.. constants 
-local function searchForAndGoto(ed, text, searchBackwards, minPos)
-  local flags = wxstc.wxSTC_FIND_WHOLEWORD
-  if minPos == nil then minPos= ed:GetCurrentPos() end
+local function searchForAndGoto(ed, text, searchBackwards, redo)
+  local extend = isModeVisual(editMode)
+  local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD
+  minPos = redo == nil and ed:GetCurrentPos() or redo
   local maxPos = searchBackwards and 0 or ed:GetLength()
   local pos = ed:FindText(minPos, maxPos, text, flags)
   if pos ~= wxstc.wxSTC_INVALID_POSITION then
     if pos == minPos then 
       -- we're already at the beginning of the text, search again from after text
-      searchForAndGoto(ed, text, searchBackwards, minPos + #text) 
-      return 
+      if redo == nil then 
+        searchForAndGoto(ed, text, searchBackwards, minPos + #text)
+        return 
+      end
     end
-    ed:GotoPos(pos)
+    gotoPosition(ed, pos)
   end
 end
 
-local function yank(ed)
-  local origPos = ed:GetCurrentPos()
-  local line = ed:GetCurrentLine()
-  ed:SetSelectionStart(ed:PositionFromLine(line))
-  local lastLine = line + math.max(0, curNumber-1)
-  --ed:SetSelectionEnd(ed:GetLineEndPosition(lastLine))
-  -- GetLineEndPosition doesn't get CR/LF so do this instead
-  ed:SetSelectionEnd(ed:PositionFromLine(lastLine) + ed:LineLength(lastLine))
-  ed:Copy()
-  ed:SetEmptySelection(origPos)
-end
-
-local function hasSelection(editor)
+function hasSelection(editor)
   return (editor:GetSelectionStart() ~= editor:GetSelectionEnd())
 end
+
+----------------------------------------------------------------------------------------------------
 
 local commandsCommandLine = {
     ["w"]       = function(ed) ide:GetDocument(ed):Save() end,
@@ -219,9 +246,17 @@ local function parseAndExecuteCommandLine(editor)
   resetCurrentVars()
 end
 
+----------------------------------------------------------------------------------------------------
+
+local motionsThatRequireArg = {
+  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true
+}
+
 local motions = {
   ["PGUP"]    = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
+  ["d+Ctrl"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
   ["PGDOWN"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
+  ["f+Ctrl"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
   ["}"]       = function(ed, extend, reps) executeMotion("DOWN", ed, extend)
                                            callExtendableFunc(ed, "ParaDown" ,extend, reps) 
                                            executeMotion("UP", ed, extend)
@@ -243,17 +278,30 @@ local motions = {
   ["k"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineUp"   ,extend, reps) end,
   ["UP"]      = function(ed, extend, reps) callExtendableFunc(ed, "LineUp"   ,extend, reps) end,
   ["l"]       = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end,
-  ["RIGHT"]   = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end
+  ["RIGHT"]   = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end,
+  ["f"]       = function(ed, extend, reps) searchForAndGoto(ed, cmd.arg, false) end,
+  ["F"]       = function(ed, extend, reps) searchForAndGoto(ed, cmd.arg, true) end
 }
 
-function executeMotion(motion, ed, extend, reps)
-  motions[motion](ed, extend, reps)
+local nextCharIsMotionArg = false
+
+function executeMotion(motion, ed, extend, reps) -- TODO: remove extend from this and calls
+  if motionsThatRequireArg[motion] then
+    if cmd.arg == "" then 
+      nextCharIsMotionArg = true
+      return false
+    end
+  end
+  motions[motion](ed, isModeVisual(editMode), reps)
 end
+
+----------------------------------------------------------------------------------------------------
 
 local function selectCurrentLine(ed, incLineEnd)
   local line = ed:GetCurrentLine()
   local lineStart = ed:PositionFromLine(line)
-  local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) or ed:GetLineEndPosition(line)
+  local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) 
+                                     or ed:GetLineEndPosition(line)
   if not hasSelection(ed) then 
     ed:SetSelectionStart(lineStart)
     ed:SetSelectionEnd(lineEnd)
@@ -290,7 +338,7 @@ end
 
 local operators = {
   ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Cut() end ; end,
+                                         if final then ed:Cut() cancelSelection(ed) end ; end,
   ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then moveCaretLeftPastSpaces(ed) ; ed:Cut() 
                                            if linewise then
@@ -301,69 +349,62 @@ local operators = {
   ["y"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Copy() cancelSelection(ed) end ; end,
   ["x"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Cut() ; cancelSelection(ed) end ; end
+                                         if final then ed:Cut() ; cancelSelection(ed) end ; end,
 }  
 
 
+----------------------------------------------------------------------------------------------------
+
 local commandsNormal = { 
-  ["v"]       = function(ed) setMode(kEditMode.visual, false) end,
-  ["V"]       = function(ed) setMode(kEditMode.visualLine, false) end,
-  ["v+Ctrl"]  = function(ed) setMode(kEditMode.visualBlock, false) end,
-  ["i"]       = function(ed) setMode(kEditMode.insert, false) end,
-  ["I"]       = function(ed) ed:Home() ; setMode(kEditMode.insert, false) end,
-  ["a"]       = function(ed) setMode(kEditMode.insert, false) end,
-  ["A"]       = function(ed) ed:LineEnd() ; setMode(kEditMode.insert, false) end,
-  ["R"]       = function(ed) setMode(kEditMode.insert, true) end,
-  ["gg"]      = function(ed) callExtendableFunc(ed, "DocumentStart") end,
-  ["gt"]      = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
-                               ID.NOTEBOOKTABNEXT)) end,
-  ["gT"]      = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
-                               ID.NOTEBOOKTABPREV)) end,
-  ["G"]       = function(ed) if curNumber > 0 then
-                               local line = ed:GetCurrentLine()
-                               local relative = curNumber - 1 - line
-                               local reps = math.abs(relative)
-                               if relative <= 0 then
-                                 motions["k"](ed, nil, reps)
-                               else
-                                 motions["j"](ed, nil, reps)
-                               end
-                               motions["HOME"](ed, nil)
-                             else
-                               callExtendableFunc(ed, "DocumentEnd")
-                             end ; end,
-  ["x"]       = function(ed) normOrVisFunc(ed, "DeleteBack", "Cut") end,
-  ["o"]       = function(ed) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
-                             ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
-  ["O"]       = function(ed) ed:LineUp()
-                             ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
-                             ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
-  ["Y"]       = function(ed) yank(ed) end,
-  ["p"]       = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do ed:Paste() end ; end,
-  ["u"]       = function(ed) for i=1, math.max(curNumber, 1) do ed:Undo() end ; end,
-  ["zz"]      = function(ed) ed:VerticalCentreCaret() end,
-  ["z."]      = function(ed) ed:VerticalCentreCaret() end,
-  ["zt"]      = function(ed) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
-  ["zb"]      = function(ed) ed:SetFirstVisibleLine(math.max(0, ed:GetCurrentLine() - ed:LinesOnScreen() + 1)) ; end,
-  ["r+Ctrl"]  = function(ed) ed:Redo() end,
-  ["."]       = function(ed) curNumber = lastNumber ; executeCommandNormal(lastCommand, ed) end,
-  ["DEL"]     = function(ed) local pos = ed:GetCurrentPos() ; ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end,
-  ["#"]       = function(ed) openRealVim(ed) end,
+  ["v"]      = function(ed) setMode(kEditMode.visual, false) end,
+  ["V"]      = function(ed) setMode(kEditMode.visualLine, false) end,
+  ["v+Ctrl"] = function(ed) setMode(kEditMode.visualBlock, false) end,
+  ["i"]      = function(ed) setMode(kEditMode.insert, false) end,
+  ["I"]      = function(ed) ed:Home() ; setMode(kEditMode.insert, false) end,
+  ["a"]      = function(ed) setMode(kEditMode.insert, false) end,
+  ["A"]      = function(ed) ed:LineEnd() ; setMode(kEditMode.insert, false) end,
+  ["R"]      = function(ed) setMode(kEditMode.insert, true) end,
+  ["gg"]     = function(ed) callExtendableFunc(ed, "DocumentStart") end,
+  ["gt"]     = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
+                              ID.NOTEBOOKTABNEXT)) end,
+  ["gT"]     = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
+                              ID.NOTEBOOKTABPREV)) end,
+  ["G"]      = function(ed) if curNumber > 0 then
+                              gotoPosition(ed, ed:PositionFromLine(curNumber - 1))
+                            else
+                              callExtendableFunc(ed, "DocumentEnd")
+                            end ; end,
+  ["x"]      = function(ed) normOrVisFunc(ed, "DeleteBack", "Cut") end,
+  ["o"]      = function(ed) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
+                            ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
+  ["O"]      = function(ed) ed:LineUp()
+                            ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
+                            ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
+  ["Y"]      = function(ed) cmd.cmdchar = "y"
+                            executeCommand(cmd, curNumber, ed, nil, true, false) end,
+  ["p"]      = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do 
+                              ed:Paste() 
+                            end ; end,
+  ["u"]      = function(ed) for i=1, math.max(curNumber, 1) do ed:Undo() end ; end,
+  ["zz"]     = function(ed) ed:VerticalCentreCaret() end,
+  ["z."]     = function(ed) ed:VerticalCentreCaret() end,
+  ["zt"]     = function(ed) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
+  ["zb"]     = function(ed) local pos = ed:GetCurrentLine() - ed:LinesOnScreen() + 1
+                            ed:SetFirstVisibleLine(math.max(0, pos)) ; end,
+  ["r+Ctrl"] = function(ed) ed:Redo() end,
+  ["."]      = function(ed) curNumber = lastNumber ; cmd = cmdLast ; 
+                            validateAndExecuteCommand(ed, cmd) end,
+  ["DEL"]    = function(ed) local pos = ed:GetCurrentPos()
+                            ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end,
+  ["#"]      = function(ed) openRealVim(ed) end,
+  ["Q"]      = function(ed) ed:SetRectangularSelectionCaret(ed:GetCurrentPos()+1) end
 }
 
-local commandsVisual = {
-  ["c"] = function(ed, cmd) end,
-  ["x"] = function(ed, cmd) end,
-  ["y"] = function(ed, cmd) end
-}
 
--- this remains local because of forward declaration
--- noUndo passed to any relevant function in case we
--- want to extend 
-function executeCommandNormal(key, editor, noUndo)
+function executeCmdNormal(key, editor)
   local retVal
   if commandsNormal[key] ~= nil then
-    retVal = commandsNormal[key](editor, noUndo)
+    retVal = commandsNormal[key](editor)
     if key ~= "." then
       lastNumber = curNumber
       lastCommand = key
@@ -374,10 +415,17 @@ function executeCommandNormal(key, editor, noUndo)
   return (retVal == true and true or false)
 end
 
-local function doesCommandExpectMotionElement(cmdKey)
+----------------------------------------------------------------------------------------------------
+
+local function doesCommandExpectSecondChar(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
-         cmdKey == "y"
+         cmdKey == "y" or cmdKey == "f" or cmdKey == "F"
+end
+
+-- these commands treat numbers as chars, so check with this
+local function doesCommandUseNumberAsChar(cmdKey)
+  return cmdKey == "f" or cmdKey == "F"
 end
 
 -- forward declaration at top of file
@@ -398,54 +446,72 @@ function eventKeyNumToChar(keyNum)
       else
         if shiftMap[key] then return shiftMap[key] else return key end
       end
-    else
-      if wx.wxGetKeyState(wx.WXK_SHIFT) then key = key .. "+Shift" return key end
     end
   end
   return (keyMap[tostring(keyNum)] or tostring(keyNum))
 end
 
-local function executeCommand(cmd, cmdReps, editor, motionReps, linewise, doMotion)
+function executeCommand(cmd, cmdReps, editor, motionReps, linewise, doMotion)
+  if doMotion then 
+    if motionsThatRequireArg[cmd.nchar] and cmd.arg == "" then 
+      nextCharIsMotionArg = true 
+      return false 
+    end
+  end
   editor:BeginUndoAction()
   local iters = math.max(cmdReps, 1)
   for i = 1, iters do
     if doMotion then motions[cmd.nchar](editor, true, motionReps) end
     local final = i == iters and true or false
-    operators[cmd.cmdchar](editor, linewise, final)
+    operators[cmd.cmdchar](editor, linewise, final, cmd)
   end
   editor:EndUndoAction()
 end
 
-local function validateAndExecuteCommand(editor, cmd)
-  _DBG("cmd.prechar: ", cmd.prechar)
+local function _DBGCMD()
+  _DBG("Edit mode: ", editMode)
+  _DBG("cmd.prechar: ", "'" ..cmd.prechar .."'")
   _DBG("cmd.count1: ", cmd.count1)
-  _DBG("cmd.cmdchar: ", cmd.cmdchar)
+  _DBG("cmd.cmdchar: ", "'".. cmd.cmdchar .. "'")
   _DBG("cmd.count2: ", cmd.count2)
-  _DBG("cmd.nchar: ", cmd.nchar)
+  _DBG("cmd.nchar: ", "'" .. cmd.nchar .. "'")
+  _DBG("cmd.arg: ", "'" .. cmd.arg .. "'")
+  _DBG("------------------------------------------")
+end
+  
+function validateAndExecuteCommand(editor, cmd)
   if cmd.cmdchar ~= "" then
     curNumber = cmd.count1
     if cmd.nchar == "" then
-      if motions[cmd.cmdchar] then 
+      if motions[cmd.cmdchar] then
+        if motionsThatRequireArg[cmd.cmdchar] and cmd.arg == "" then 
+          nextCharIsMotionArg = true 
+          return false 
+        end
         editor:BeginUndoAction()
-        motions[cmd.cmdchar](editor, false, math.max(cmd.count1, 1))
+        local retval = executeMotion(cmd.cmdchar, editor, extend, reps)
+        --motions[cmd.cmdchar](editor, false, math.max(cmd.count1, 1))
         editor:EndUndoAction()
-        return true 
-      elseif not doesCommandExpectMotionElement(cmd.cmdchar) then
+        return true
+      elseif not doesCommandExpectSecondChar(cmd.cmdchar) then
         editor:BeginUndoAction()
         if operators[cmd.cmdchar] then
           executeCommand(cmd, curNumber, editor, nil, false, false)
         else
-          _DBG("Performed from old table!")
-          _DBG("---"..cmd.prechar.. cmd.cmdchar)
-          executeCommandNormal(cmd.prechar .. cmd.cmdchar, editor)
+          _DBG("Performed from command table!")
+          executeCmdNormal(cmd.prechar .. cmd.cmdchar, editor)
         end
         editor:EndUndoAction()
         return true
       end
     else
-      -- we have an operator and a motion or linewise (eg dd, cc)
+      -- we have an operator and a 2nd char eg motion or linewise (dd, cc)
       if operators[cmd.cmdchar] then
-        if motions[cmd.nchar] then
+        -- check if marker or find -- TODO: goto
+        if motionsThatRequireArg[cmd.cmdchar] then
+          executeCommand(cmd, curNumber, editor, nil, false, false)
+          return true
+        elseif motions[cmd.nchar] then
           executeCommand(cmd, curNumber, editor, math.max(cmd.count2, 1), false, true)
           return true
         else
@@ -455,8 +521,8 @@ local function validateAndExecuteCommand(editor, cmd)
           end
         end
       end
-      executeCommandNormal(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
-      _DBG("Performed from old table!")
+      _DBG("Performed from command table.")
+      executeCmdNormal(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
       return true
     end
   end
@@ -464,7 +530,35 @@ local function validateAndExecuteCommand(editor, cmd)
   return false
 end
 
------------------------------------------------------------------------------------------------------
+local function isKeyModifier(keyNum)
+  return ( keyNum >= 306 and keyNum <= 308 )
+end
+
+local hotKeysToSetRestore = {
+  { sc = "Ctrl+r", action = function() curEditor:Redo() end,                             id = nil },
+  { sc = "Ctrl+v", action = function() executeCmdNormal("v+Ctrl", curEditor, false) end, id = nil }
+}
+
+function setOrRestoreHotKeys(setNotRestore)
+  --if true then return end
+  if setNotRestore then
+    for k, v in pairs(hotKeysToSetRestore) do
+      local sc
+      if v.id == nil then v.id, sc = ide:GetHotKey(v.sc) end
+      local ret = ide:SetHotKey(v.action, v.sc)
+      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
+    end
+  else
+    for k, v in pairs(hotKeysToSetRestore) do
+      local ret = ide:SetHotKey(v.id, v.sc)
+      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
+    end
+  end
+end
+
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
 return {
   name = "Vim",
@@ -473,19 +567,34 @@ return {
   version = "0.3",
   dependencies = "1.61",
   
+----------------------------------------------------------------------------------------------------
   onRegister = function(self)
     setMode(kEditMode.insert)
     -- currently need to override ZBS shortcuts here
     --origCtrlReg = 
-    ide:SetHotKey(function() curEditor:Redo() end, "Ctrl+R")
+    --ide:SetHotKey(function() curEditor:Redo() end, "Ctrl+R")
     cmd = newCommand()
     ide:SetStatus("Press 'Escape' to enter Vim editing mode")
   end,
 
+----------------------------------------------------------------------------------------------------
   onEditorKeyDown = function(self, editor, event)
     curEditor = editor
     local key =  tostring(event:GetKeyCode())
     local keyNum = tonumber(key)
+    
+    key = eventKeyNumToChar(keyNum)
+    
+    if nextCharIsMotionArg and not isKeyModifier(keyNum) then 
+      cmd.arg = tostring(key)
+      nextCharIsMotionArg = false
+      _DBGCMD()
+      if validateAndExecuteCommand(editor, cmd) then 
+        cmdLast = table.clone(cmd)
+        cmd = newCommand()
+      end
+      return false
+    end
     
     if editMode == kEditMode.insert then
       if keyNum == 27 then 
@@ -499,7 +608,6 @@ return {
       -- not insert mode, check for colon to enter command line mode
       if editMode ~= kEditMode.commandLine and keyNum == 59 and wx.wxGetKeyState(wx.WXK_SHIFT) then
         setMode(kEditMode.commandLine)
-        ide:GetOutputNotebook().errorlog:Erase()
         ide:SetStatus(":")
         resetCurrentVars()
         curCommand = ":"
@@ -507,12 +615,9 @@ return {
       end
     end
 
-    -- in Vim mode. Do nothing with Ctrl, Shift or Alt events
-    if keyNum >= 306 and keyNum <= 308 then return false end 
     
-    key = eventKeyNumToChar(keyNum)
-        
-    -----------------------------------------------------------------
+    if isKeyModifier(keyNum) then return false end   
+    ------------------------------------------------------------------------------------------------
     --         Command Line Mode        
     if editMode == kEditMode.commandLine then
       -- clear output window
@@ -537,16 +642,18 @@ return {
       end
       return false
     end
-    -----------------------------------------------------------------
+    ------------------------------------------------------------------------------------------------
     
     -- not command line, remap key if required
     if keyRemap[key] then key = keyRemap[key] end
     
-    -----------------------------------------------------------------
+    ------------------------------------------------------------------------------------------------
     --    Normal/Visual Modes 
     if keyNum == 27 then setMode(kEditMode.normal) ; cmd = newCommand() return false end
+  
     -- handle numbers
     if tonumber(key) and tonumber(key) < 10 then
+      local processAsChar = false
       if cmd.cmdchar == "" then
         -- lone zero is line start command
         if cmd.count1 == 0 and tonumber(key) == 0 then
@@ -556,14 +663,22 @@ return {
           cmd.count1 = cmd.count1 * 10 + tonumber(key)
         end
       else
-        if cmd.count2 == 0 and tonumber(key) == 0 then
-          key = "HOME"
+        -- we already have a command letter
+        if (cmd.count2 == 0 and tonumber(key) == 0) then
+          -- zero after command means home
+          key = "0"
+          processAsChar = true
+        elseif cmd.count2 == 0 and doesCommandUseNumberAsChar(cmd.cmdchar) then
+          -- any number after these commands is treated r
+          key = tostring(key)
+          processAsChar = true
         else
           cmd.count2 = cmd.count2 * 10 + tonumber(key)
         end
       end
-      if key ~= "HOME" then return false end
+      if not processAsChar then return false end
     end
+    -- process chars
     if cmd.cmdchar == "" then 
       if key == 'g' then 
         if cmd.prechar == "" then 
@@ -577,13 +692,14 @@ return {
     else
       cmd.nchar = key
     end
+    _DBGCMD()
     if validateAndExecuteCommand(editor, cmd) then 
       cmdLast = table.clone(cmd)
       cmd = newCommand()
     end
     
     return false
-    -----------------------------------------------------------------
+    ------------------------------------------------------------------------------------------------
   end,
   
   -- caret setting is per document/editor, but our Vim mode is global
