@@ -77,6 +77,32 @@ keymap.keyNumToChar = function(keyNum)
   return (keymap.sys[tostring(keyNum)] or tostring(keyNum))
 end
 
+keymap.isKeyModifier = function(keyNum)
+  return ( keyNum >= 306 and keyNum <= 308 )
+end
+
+keymap.hotKeysToOverride = {
+  { sc = "Ctrl+r", action = function() curEditor:Redo() end,                             id = nil },
+  { sc = "Ctrl+v", action = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
+}
+
+keymap.overrideHotKeys = function(setNotRestore)
+  --if true then return end
+  if setNotRestore then
+    for k, v in pairs(keymap.hotKeysToOverride) do
+      local sc
+      if v.id == nil then v.id, sc = ide:GetHotKey(v.sc) end
+      local ret = ide:SetHotKey(v.action, v.sc)
+      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
+    end
+  else
+    for k, v in pairs(keymap.hotKeysToOverride) do
+      local ret = ide:SetHotKey(v.id, v.sc)
+      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
+    end
+  end
+end
+
 ----------------------------------------------------------------------------------------------------
 -- visualBlock and visualLine are not very useful at the moment
 local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", 
@@ -90,6 +116,7 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
 
 -- forward declarations of function variables
 local hasSelection
+local setCaret
 
 local editMode = nil
 -- bound repetitions of some functions to this value
@@ -144,10 +171,6 @@ local function openRealVim(ed)
   end
 end
 
-local function setCaret(editor)
-  editor:SetCaretStyle(editMode == kEditMode.insert and 1 or 2)
-end
-
 local function isModeVisual(mode)
   return ( mode == kEditMode.visual or mode == kEditMode.visualBlock or
          mode == kEditMode.visualLine )
@@ -181,15 +204,18 @@ local function setMode(mode, overtype)
   curEditor:SetOvertype(overtype)
 end
 
+----------------------------------------------------------------------------------------------------
+-- text editing functions
+----------------------------------------------------------------------------------------------------
+function setCaret(editor)
+  editor:SetCaretStyle(editMode == kEditMode.insert and 1 or 2)
+end
+
 -- some wxStyledTextCtrl methods have Extend versions
 -- so this saves a bit of duplication for working
 -- in visual mode
-local function callExtendableFunc(obj, name, callExtend, reps)
-  if callExtend ~= nil then
-    extend = callExtend == true and "Extend" or ""
-  else
-    extend = isModeVisual(editMode) and "Extend" or ""
-  end
+local function callExtendableFunc(obj, name, reps)
+  extend = isModeVisual(editMode) and "Extend" or ""
   reps = reps ~= nil and reps or math.max(curNumber, 1)
   for i = 1, reps do
     obj[name .. extend](obj)
@@ -245,6 +271,47 @@ function hasSelection(editor)
   return (editor:GetSelectionStart() ~= editor:GetSelectionEnd())
 end
 
+local function selectCurrentLine(ed, incLineEnd)
+  local line = ed:GetCurrentLine()
+  local lineStart = ed:PositionFromLine(line)
+  local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) 
+                                     or ed:GetLineEndPosition(line)
+  if not hasSelection(ed) then 
+    ed:SetSelectionStart(lineStart)
+    ed:SetSelectionEnd(lineEnd)
+  else
+    -- extend existing selection by line
+    if ed:GetSelectionStart() < lineStart then
+      ed:SetSelectionEnd(lineEnd)
+    else
+      ed:SetSelectionStart(lineStart)
+    end
+  end
+end
+
+local function cancelSelection(ed)
+  ed:SetEmptySelection(ed:GetCurrentPos())
+  setMode(kEditMode.normal)
+end
+
+local function restoreCaretPos(ed, cmd)
+  if cmd.origPos ~= nil then
+    ed:SetCurrentPos(cmd.origPos)
+  end
+end
+
+-- for change operator, to match Vim behaviour of only changing word
+-- and not trailing space
+local function moveCaretLeftPastSpaces(ed)
+  local char = ed:GetCharAt(ed:GetCurrentPos() - 1)
+  while char == 32 do
+    cmds.motions["h"](ed, 1)
+    char = ed:GetCharAt(ed:GetCurrentPos() - 1)
+  end
+end
+
+----------------------------------------------------------------------------------------------------
+-- vim commands and logic
 ----------------------------------------------------------------------------------------------------
 local cmds = {}
 
@@ -258,7 +325,7 @@ cmds.execute = function(cmd, cmdReps, editor, motionReps, linewise, doMotion)
   editor:BeginUndoAction()
   local iters = math.max(cmdReps, 1)
   for i = 1, iters do
-    if doMotion then cmds.motions[cmd.nchar](editor, true, motionReps) end
+    if doMotion then cmds.motions[cmd.nchar](editor, motionReps) end
     local final = i == iters and true or false
     cmds.operators[cmd.cmdchar](editor, linewise, final, cmd)
   end
@@ -345,34 +412,34 @@ end
 
 ----------------------------------------------------------------------------------------------------
 cmds.motions = {
-  ["PGUP"]    = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
-  ["d+Ctrl"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
-  ["PGDOWN"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
-  ["f+Ctrl"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
-  ["}"]       = function(ed, extend, reps) cmds.motions.execute("DOWN", ed)
-                                           callExtendableFunc(ed, "ParaDown" ,extend, reps) 
-                                           cmds.motions.execute("UP", ed)
-                                           end,
-  ["{"]       = function(ed, extend, reps) callExtendableFunc(ed, "ParaUp", extend, reps) 
-                                           cmds.motions.execute("UP", ed) end,
-  ["END"]     = function(ed, extend, reps) callExtendableFunc(ed, "LineEnd"  ,extend, reps) end,
-  ["$"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineEnd"  ,extend, reps) end,
-  ["HOME"]    = function(ed, extend, reps) callExtendableFunc(ed, "Home"     ,extend, reps) end,
-  ["0"]       = function(ed, extend, reps) callExtendableFunc(ed, "Home"     ,extend, reps) end,
-  ["^"]       = function(ed, extend, reps) callExtendableFunc(ed, "VCHome"   ,extend, reps) end,
-  ["b"]       = function(ed, extend, reps) callExtendableFunc(ed, "WordLeft" ,extend, reps) end,
-  ["w"]       = function(ed, extend, reps) callExtendableFunc(ed, "WordRight",extend, reps) end,
-  ["h"]       = function(ed, extend, reps) callExtendableFunc(ed, "CharLeft" ,extend, reps) end,
-  ["BS"]      = function(ed, extend, reps) callExtendableFunc(ed, "CharLeft" ,extend, reps) end, 
-  ["LEFT"]    = function(ed, extend, reps) callExtendableFunc(ed, "CharLeft" ,extend, reps) end, 
-  ["j"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineDown" ,extend, reps) end,
-  ["DOWN"]    = function(ed, extend, reps) callExtendableFunc(ed, "LineDown" ,extend, reps) end,
-  ["k"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineUp"   ,extend, reps) end,
-  ["UP"]      = function(ed, extend, reps) callExtendableFunc(ed, "LineUp"   ,extend, reps) end,
-  ["l"]       = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end,
-  ["RIGHT"]   = function(ed, extend, reps) callExtendableFunc(ed, "CharRight",extend, reps) end,
-  ["f"]       = function(ed, extend, reps) searchForAndGoto(ed, cmd.arg, false) end,
-  ["F"]       = function(ed, extend, reps) searchForAndGoto(ed, cmd.arg, true) end
+  ["PGUP"]    = function(ed, reps) callExtendableFunc(ed, "PageUp"  , reps) end,
+  ["d+Ctrl"]  = function(ed, reps) callExtendableFunc(ed, "PageUp"  , reps) end,
+  ["PGDOWN"]  = function(ed, reps) callExtendableFunc(ed, "PageDown", reps) end,
+  ["f+Ctrl"]  = function(ed, reps) callExtendableFunc(ed, "PageDown", reps) end,
+  ["}"]       = function(ed, reps) cmds.motions.execute("DOWN", ed)
+                                   callExtendableFunc(ed, "ParaDown", reps) 
+                                   cmds.motions.execute("UP", ed)
+                                   end,
+  ["{"]       = function(ed, reps) callExtendableFunc(ed, "ParaUp"   , reps) 
+                                cmds.motions.execute("UP", ed) end,
+  ["END"]     = function(ed, reps) callExtendableFunc(ed, "LineEnd"  , reps) end,
+  ["$"]       = function(ed, reps) callExtendableFunc(ed, "LineEnd"  , reps) end,
+  ["HOME"]    = function(ed, reps) callExtendableFunc(ed, "Home"     , reps) end,
+  ["0"]       = function(ed, reps) callExtendableFunc(ed, "Home"     , reps) end,
+  ["^"]       = function(ed, reps) callExtendableFunc(ed, "VCHome"   , reps) end,
+  ["b"]       = function(ed, reps) callExtendableFunc(ed, "WordLeft" , reps) end,
+  ["w"]       = function(ed, reps) callExtendableFunc(ed, "WordRight", reps) end,
+  ["h"]       = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps) end,
+  ["BS"]      = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps) end, 
+  ["LEFT"]    = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps) end, 
+  ["j"]       = function(ed, reps) callExtendableFunc(ed, "LineDown" , reps) end,
+  ["DOWN"]    = function(ed, reps) callExtendableFunc(ed, "LineDown" , reps) end,
+  ["k"]       = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps) end,
+  ["UP"]      = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps) end,
+  ["l"]       = function(ed, reps) callExtendableFunc(ed, "CharRight", reps) end,
+  ["RIGHT"]   = function(ed, reps) callExtendableFunc(ed, "CharRight", reps) end,
+  ["f"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, false) end,
+  ["F"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, true) end
 }
 
 cmds.motions.needArgs = {
@@ -389,50 +456,11 @@ cmds.motions.execute = function(motion, ed, reps)
       return false
     end
   end
-  cmds.motions[motion](ed, isModeVisual(editMode), reps)
+  cmds.motions[motion](ed, reps)
 end
 
 ----------------------------------------------------------------------------------------------------
-local function selectCurrentLine(ed, incLineEnd)
-  local line = ed:GetCurrentLine()
-  local lineStart = ed:PositionFromLine(line)
-  local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) 
-                                     or ed:GetLineEndPosition(line)
-  if not hasSelection(ed) then 
-    ed:SetSelectionStart(lineStart)
-    ed:SetSelectionEnd(lineEnd)
-  else
-    -- extend existing selection by line
-    if ed:GetSelectionStart() < lineStart then
-      ed:SetSelectionEnd(lineEnd)
-    else
-      ed:SetSelectionStart(lineStart)
-    end
-  end
-end
 
-local function cancelSelection(ed)
-  ed:SetEmptySelection(ed:GetCurrentPos())
-  setMode(kEditMode.normal)
-end
-
-local function restoreCaretPos(ed, cmd)
-  if cmd.origPos ~= nil then
-    ed:SetCurrentPos(cmd.origPos)
-  end
-end
-
--- for change operator, to match Vim behaviour of only changing word
--- and not trailing space
-local function moveCaretLeftPastSpaces(ed)
-  local char = ed:GetCharAt(ed:GetCurrentPos() - 1)
-  while char == 32 do
-    cmds.motions["h"](ed, true, 1)
-    char = ed:GetCharAt(ed:GetCurrentPos() - 1)
-  end
-end
-
-----------------------------------------------------------------------------------------------------
 cmds.operators = {
   ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Cut() cancelSelection(ed) end ; end,
@@ -495,7 +523,6 @@ cmds.general = {
   ["Q"]      = function(ed) ed:SetRectangularSelectionCaret(ed:GetCurrentPos()+1) end
 }
 
-
 cmds.general.execute = function(key, editor)
   local retVal
   if cmds.general[key] ~= nil then
@@ -523,33 +550,6 @@ local function _DBGCMD()
   _DBG("------------------------------------------")
 end
   
-local function isKeyModifier(keyNum)
-  return ( keyNum >= 306 and keyNum <= 308 )
-end
-
-local hotKeysToSetRestore = {
-  { sc = "Ctrl+r", action = function() curEditor:Redo() end,                             id = nil },
-  { sc = "Ctrl+v", action = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
-}
-
-function setOrRestoreHotKeys(setNotRestore)
-  --if true then return end
-  if setNotRestore then
-    for k, v in pairs(hotKeysToSetRestore) do
-      local sc
-      if v.id == nil then v.id, sc = ide:GetHotKey(v.sc) end
-      local ret = ide:SetHotKey(v.action, v.sc)
-      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
-    end
-  else
-    for k, v in pairs(hotKeysToSetRestore) do
-      local ret = ide:SetHotKey(v.id, v.sc)
-      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
-    end
-  end
-end
-
-
 ----------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
@@ -578,7 +578,7 @@ local plugin = {
     
     key = keymap.keyNumToChar(keyNum)
     
-    if cmds.motions.requireNextChar and not isKeyModifier(keyNum) then 
+    if cmds.motions.requireNextChar and not keymap.isKeyModifier(keyNum) then 
       cmd.arg = tostring(key)
       cmds.motions.requireNextChar = false
       _DBGCMD()
@@ -609,12 +609,10 @@ local plugin = {
     end
 
     
-    if isKeyModifier(keyNum) then return false end   
+    if keymap.isKeyModifier(keyNum) then return false end   
     ------------------------------------------------------------------------------------------------
     --         Command Line Mode        
     if editMode == kEditMode.commandLine then
-      -- clear output window
-      ide:GetOutputNotebook().errorlog:Erase()
       if keyNum == 13 then
         setMode(kEditMode.normal)
         cmds.cmdLine.execute(editor)
