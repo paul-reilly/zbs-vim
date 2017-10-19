@@ -31,31 +31,53 @@
 --         '-' remapped as '$' so '0' = HOME, '-' = END
 --   
 --   
------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
 local DEBUG = true
+local _DBG -- for console output, definition at EOF
 
-local function _DBG(...)
-  if DEBUG then 
-    local msg = "" for k,v in ipairs{...} do msg = msg .. tostring(v) .. "\t" end ide:Print(msg)
-  end
-end
+----------------------------------------------------------------------------------------------------
+local keymap = {}
 
 -- remap any keys you want here
-local keyRemap = { ["-"] = "$" }             
+keymap.user = { ["-"] = "$" }             
 
 -- Table mapping number keys to their shifted characters. You might need to edit this to suit
 -- your locale
-local shiftMap = {["0"] = ")", ["1"] = "!", ["2"]  = "\"", ["3"] = "£", ["4"] = "$", 
-                  ["5"] = "%", ["6"] = "^", ["7"]  = "&" , ["8"] = "*", ["9"] = "(",
-                  [";"] = ":", ["'"] = "@", ["#"]  = "~" , ["["] = "{", ["]"] = "}",
-                  ["-"] = "_", ["="] = "+", ["\\"] = "|" , [","] = "<", ["."] = ">",
-                  ["/"] = "?"
+keymap.shift = {["0"] = ")", ["1"] = "!", ["2"]  = "\"", ["3"] = "£", ["4"] = "$", 
+                ["5"] = "%", ["6"] = "^", ["7"]  = "&" , ["8"] = "*", ["9"] = "(",
+                [";"] = ":", ["'"] = "@", ["#"]  = "~" , ["["] = "{", ["]"] = "}",
+                ["-"] = "_", ["="] = "+", ["\\"] = "|" , [","] = "<", ["."] = ">",
+                ["/"] = "?"
 }
 
-local keyMap = {["8"] = "BS",     ["9"] = "TAB",     ["92"]  = "\\",   ["127"] = "DEL",     
-                ["312"] = "END",  ["313"] = "HOME",  ["314"] = "LEFT", ["315"] = "UP",   
-                ["316"] = "RIGHT",["317"] = "DOWN",  ["366"] = "PGUP", ["367"] = "PGDOWN"}
+keymap.sys = {["8"] = "BS",     ["9"] = "TAB",     ["92"]  = "\\",   ["127"] = "DEL",     
+              ["312"] = "END",  ["313"] = "HOME",  ["314"] = "LEFT", ["315"] = "UP",   
+              ["316"] = "RIGHT",["317"] = "DOWN",  ["366"] = "PGUP", ["367"] = "PGDOWN"}
 
+-- convert keyDown event key number to real char
+keymap.keyNumToChar = function(keyNum)
+  local number
+  if keyNum >= 48 and keyNum <= 57 then
+    number = keyNum - 48
+    if not wx.wxGetKeyState(wx.WXK_SHIFT) then
+      return number
+    else
+      return keymap.shift[tostring(number)]
+    end
+  else
+    if keyNum >= 32 and keyNum <= 126 then
+      key = string.char(keyNum)
+      if not wx.wxGetKeyState(wx.WXK_SHIFT) then 
+        return key:lower()
+      else
+        if keymap.shift[key] then return keymap.shift[key] else return key end
+      end
+    end
+  end
+  return (keymap.sys[tostring(keyNum)] or tostring(keyNum))
+end
+
+----------------------------------------------------------------------------------------------------
 -- visualBlock and visualLine are not very useful at the moment
 local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", 
                     visualLine = "Visual - Line", insert = "Insert - ZeroBrane", 
@@ -67,13 +89,7 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
                              ["repeat"] = "repeat" }
 
 -- forward declarations of function variables
-local eventKeyNumToChar
-local executeCommandNormal
-local executeMotion
 local hasSelection
-local validateAndExecuteCommand
-local executeCommand
-
 
 local editMode = nil
 -- bound repetitions of some functions to this value
@@ -107,7 +123,6 @@ local cmd -- initialised in onRegister
 local cmdLast
 
 ----------------------------------------------------------------------------------------------------
-
 local function resetCurrentVars()
   curNumber = 0
   curCommand = ""
@@ -231,38 +246,115 @@ function hasSelection(editor)
 end
 
 ----------------------------------------------------------------------------------------------------
+local cmds = {}
 
-local commandsCommandLine = {
+cmds.execute = function(cmd, cmdReps, editor, motionReps, linewise, doMotion)
+  if doMotion then 
+    if cmd.arg == "" and cmds.motions.needArgs[cmd.nchar] then 
+      cmds.motions.requireNextChar = true 
+      return false 
+    end
+  end
+  editor:BeginUndoAction()
+  local iters = math.max(cmdReps, 1)
+  for i = 1, iters do
+    if doMotion then cmds.motions[cmd.nchar](editor, true, motionReps) end
+    local final = i == iters and true or false
+    cmds.operators[cmd.cmdchar](editor, linewise, final, cmd)
+  end
+  editor:EndUndoAction()
+end
+
+cmds.cmdNeedsSecondChar = function(cmdKey)
+  if isModeVisual(editMode) then return false end
+  return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
+         cmdKey == "y" or cmdKey == "f" or cmdKey == "F"
+end
+
+-- these commands treat numbers as chars, so check with this
+cmds.cmdTakesNumberAsChar = function(cmdKey)
+  return cmdKey == "f" or cmdKey == "F"
+end
+
+-- called from key event, executes on when cmd has valid structure
+cmds.validateAndExecute = function(editor, cmd)
+  if cmd.cmdchar ~= "" then
+    curNumber = cmd.count1
+    if cmd.nchar == "" then
+      if cmds.motions[cmd.cmdchar] then
+        if cmds.motions.needArgs[cmd.cmdchar] and cmd.arg == "" then 
+          cmds.motions.requireNextChar = true 
+          return false 
+        end
+        editor:BeginUndoAction()
+        local retval = cmds.motions.execute(cmd.cmdchar, editor, reps)
+        --cmds.motions[cmd.cmdchar](editor, false, math.max(cmd.count1, 1))
+        editor:EndUndoAction()
+        return true
+      elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) then
+        editor:BeginUndoAction()
+        if cmds.operators[cmd.cmdchar] then
+          cmds.execute(cmd, curNumber, editor, nil, false, false)
+        else
+          _DBG("Performed from command table!")
+          cmds.general.execute(cmd.prechar .. cmd.cmdchar, editor)
+        end
+        editor:EndUndoAction()
+        return true
+      end
+    else
+      -- we have an operator and a 2nd char eg motion or linewise (dd, cc)
+      if cmds.operators[cmd.cmdchar] then
+        -- check if marker or find cmd 
+        if cmds.motions.needArgs[cmd.cmdchar] then
+          cmds.execute(cmd, curNumber, editor, nil, false, false)
+          return true
+        elseif cmds.motions[cmd.nchar] then
+          cmds.execute(cmd, curNumber, editor, math.max(cmd.count2, 1), false, true)
+          return true
+        else
+          if cmd.nchar == cmd.cmdchar then
+            cmds.execute(cmd, curNumber, editor, nil, true, false)
+            return true
+          end
+        end
+      end
+      _DBG("Performed from command table.")
+      cmds.general.execute(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
+      return true
+    end
+  end
+    
+  return false
+end
+
+----------------------------------------------------------------------------------------------------
+cmds.cmdLine = {
     ["w"]       = function(ed) ide:GetDocument(ed):Save() end,
     ["q"]       = function(ed) ide:GetDocument(ed):Close() end
 }
 
-local function parseAndExecuteCommandLine(editor)
+cmds.cmdLine.execute = function(editor)
   for i = 1, #curCommand do
-    if commandsCommandLine[curCommand:sub(i,i)] then
-      commandsCommandLine[curCommand:sub(i,i)](editor)
+    if cmds.cmdLine[curCommand:sub(i,i)] then
+      cmds.cmdLine[curCommand:sub(i,i)](editor)
     end
   end
   resetCurrentVars()
 end
 
 ----------------------------------------------------------------------------------------------------
-
-local motionsThatRequireArg = {
-  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true
-}
-
-local motions = {
+cmds.motions = {
   ["PGUP"]    = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
   ["d+Ctrl"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageUp"   ,extend, reps) end,
   ["PGDOWN"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
   ["f+Ctrl"]  = function(ed, extend, reps) callExtendableFunc(ed, "PageDown" ,extend, reps) end,
-  ["}"]       = function(ed, extend, reps) executeMotion("DOWN", ed, extend)
+  ["}"]       = function(ed, extend, reps) cmds.motions.execute("DOWN", ed)
                                            callExtendableFunc(ed, "ParaDown" ,extend, reps) 
-                                           executeMotion("UP", ed, extend)
+                                           cmds.motions.execute("UP", ed)
                                            end,
   ["{"]       = function(ed, extend, reps) callExtendableFunc(ed, "ParaUp", extend, reps) 
-                                           executeMotion("UP", ed, extend) end,
+                                           cmds.motions.execute("UP", ed) end,
   ["END"]     = function(ed, extend, reps) callExtendableFunc(ed, "LineEnd"  ,extend, reps) end,
   ["$"]       = function(ed, extend, reps) callExtendableFunc(ed, "LineEnd"  ,extend, reps) end,
   ["HOME"]    = function(ed, extend, reps) callExtendableFunc(ed, "Home"     ,extend, reps) end,
@@ -283,20 +375,24 @@ local motions = {
   ["F"]       = function(ed, extend, reps) searchForAndGoto(ed, cmd.arg, true) end
 }
 
-local nextCharIsMotionArg = false
+cmds.motions.needArgs = {
+  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true
+}
 
-function executeMotion(motion, ed, extend, reps) -- TODO: remove extend from this and calls
-  if motionsThatRequireArg[motion] then
+-- this is checked for in onEditorKeyDown and cmd.arg gets the next char
+cmds.motions.requireNextChar = false
+
+cmds.motions.execute = function(motion, ed, reps) 
+  if cmds.motions.needArgs[motion] then
     if cmd.arg == "" then 
-      nextCharIsMotionArg = true
+      cmds.motions.requireNextChar = true
       return false
     end
   end
-  motions[motion](ed, isModeVisual(editMode), reps)
+  cmds.motions[motion](ed, isModeVisual(editMode), reps)
 end
 
 ----------------------------------------------------------------------------------------------------
-
 local function selectCurrentLine(ed, incLineEnd)
   local line = ed:GetCurrentLine()
   local lineStart = ed:PositionFromLine(line)
@@ -331,18 +427,19 @@ end
 local function moveCaretLeftPastSpaces(ed)
   local char = ed:GetCharAt(ed:GetCurrentPos() - 1)
   while char == 32 do
-    motions["h"](ed, true, 1)
+    cmds.motions["h"](ed, true, 1)
     char = ed:GetCharAt(ed:GetCurrentPos() - 1)
   end
 end
 
-local operators = {
+----------------------------------------------------------------------------------------------------
+cmds.operators = {
   ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then ed:Cut() cancelSelection(ed) end ; end,
   ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
                                          if final then moveCaretLeftPastSpaces(ed) ; ed:Cut() 
                                            if linewise then
-                                             executeCommandNormal("O", ed)
+                                             cmds.general.execute("O", ed)
                                            else 
                                              setMode(kEditMode.insert) end
                                          end ; end,
@@ -352,10 +449,8 @@ local operators = {
                                          if final then ed:Cut() ; cancelSelection(ed) end ; end,
 }  
 
-
 ----------------------------------------------------------------------------------------------------
-
-local commandsNormal = { 
+cmds.general = { 
   ["v"]      = function(ed) setMode(kEditMode.visual, false) end,
   ["V"]      = function(ed) setMode(kEditMode.visualLine, false) end,
   ["v+Ctrl"] = function(ed) setMode(kEditMode.visualBlock, false) end,
@@ -381,7 +476,7 @@ local commandsNormal = {
                             ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
                             ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
   ["Y"]      = function(ed) cmd.cmdchar = "y"
-                            executeCommand(cmd, curNumber, ed, nil, true, false) end,
+                            cmds.execute(cmd, curNumber, ed, nil, true, false) end,
   ["p"]      = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do 
                               ed:Paste() 
                             end ; end,
@@ -393,7 +488,7 @@ local commandsNormal = {
                             ed:SetFirstVisibleLine(math.max(0, pos)) ; end,
   ["r+Ctrl"] = function(ed) ed:Redo() end,
   ["."]      = function(ed) curNumber = lastNumber ; cmd = cmdLast ; 
-                            validateAndExecuteCommand(ed, cmd) end,
+                            cmds.validateAndExecute(ed, cmd) end,
   ["DEL"]    = function(ed) local pos = ed:GetCurrentPos()
                             ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end,
   ["#"]      = function(ed) openRealVim(ed) end,
@@ -401,10 +496,10 @@ local commandsNormal = {
 }
 
 
-function executeCmdNormal(key, editor)
+cmds.general.execute = function(key, editor)
   local retVal
-  if commandsNormal[key] ~= nil then
-    retVal = commandsNormal[key](editor)
+  if cmds.general[key] ~= nil then
+    retVal = cmds.general[key](editor)
     if key ~= "." then
       lastNumber = curNumber
       lastCommand = key
@@ -416,58 +511,7 @@ function executeCmdNormal(key, editor)
 end
 
 ----------------------------------------------------------------------------------------------------
-
-local function doesCommandExpectSecondChar(cmdKey)
-  if isModeVisual(editMode) then return false end
-  return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
-         cmdKey == "y" or cmdKey == "f" or cmdKey == "F"
-end
-
--- these commands treat numbers as chars, so check with this
-local function doesCommandUseNumberAsChar(cmdKey)
-  return cmdKey == "f" or cmdKey == "F"
-end
-
--- forward declaration at top of file
-function eventKeyNumToChar(keyNum)
-  local number
-  if keyNum >= 48 and keyNum <= 57 then
-    number = keyNum - 48
-    if not wx.wxGetKeyState(wx.WXK_SHIFT) then
-      return number
-    else
-      return shiftMap[tostring(number)]
-    end
-  else
-    if keyNum >= 32 and keyNum <= 126 then
-      key = string.char(keyNum)
-      if not wx.wxGetKeyState(wx.WXK_SHIFT) then 
-        return key:lower()
-      else
-        if shiftMap[key] then return shiftMap[key] else return key end
-      end
-    end
-  end
-  return (keyMap[tostring(keyNum)] or tostring(keyNum))
-end
-
-function executeCommand(cmd, cmdReps, editor, motionReps, linewise, doMotion)
-  if doMotion then 
-    if motionsThatRequireArg[cmd.nchar] and cmd.arg == "" then 
-      nextCharIsMotionArg = true 
-      return false 
-    end
-  end
-  editor:BeginUndoAction()
-  local iters = math.max(cmdReps, 1)
-  for i = 1, iters do
-    if doMotion then motions[cmd.nchar](editor, true, motionReps) end
-    local final = i == iters and true or false
-    operators[cmd.cmdchar](editor, linewise, final, cmd)
-  end
-  editor:EndUndoAction()
-end
-
+----------------------------------------------------------------------------------------------------
 local function _DBGCMD()
   _DBG("Edit mode: ", editMode)
   _DBG("cmd.prechar: ", "'" ..cmd.prechar .."'")
@@ -479,64 +523,13 @@ local function _DBGCMD()
   _DBG("------------------------------------------")
 end
   
-function validateAndExecuteCommand(editor, cmd)
-  if cmd.cmdchar ~= "" then
-    curNumber = cmd.count1
-    if cmd.nchar == "" then
-      if motions[cmd.cmdchar] then
-        if motionsThatRequireArg[cmd.cmdchar] and cmd.arg == "" then 
-          nextCharIsMotionArg = true 
-          return false 
-        end
-        editor:BeginUndoAction()
-        local retval = executeMotion(cmd.cmdchar, editor, extend, reps)
-        --motions[cmd.cmdchar](editor, false, math.max(cmd.count1, 1))
-        editor:EndUndoAction()
-        return true
-      elseif not doesCommandExpectSecondChar(cmd.cmdchar) then
-        editor:BeginUndoAction()
-        if operators[cmd.cmdchar] then
-          executeCommand(cmd, curNumber, editor, nil, false, false)
-        else
-          _DBG("Performed from command table!")
-          executeCmdNormal(cmd.prechar .. cmd.cmdchar, editor)
-        end
-        editor:EndUndoAction()
-        return true
-      end
-    else
-      -- we have an operator and a 2nd char eg motion or linewise (dd, cc)
-      if operators[cmd.cmdchar] then
-        -- check if marker or find -- TODO: goto
-        if motionsThatRequireArg[cmd.cmdchar] then
-          executeCommand(cmd, curNumber, editor, nil, false, false)
-          return true
-        elseif motions[cmd.nchar] then
-          executeCommand(cmd, curNumber, editor, math.max(cmd.count2, 1), false, true)
-          return true
-        else
-          if cmd.nchar == cmd.cmdchar then
-            executeCommand(cmd, curNumber, editor, nil, true, false)
-            return true
-          end
-        end
-      end
-      _DBG("Performed from command table.")
-      executeCmdNormal(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
-      return true
-    end
-  end
-    
-  return false
-end
-
 local function isKeyModifier(keyNum)
   return ( keyNum >= 306 and keyNum <= 308 )
 end
 
 local hotKeysToSetRestore = {
   { sc = "Ctrl+r", action = function() curEditor:Redo() end,                             id = nil },
-  { sc = "Ctrl+v", action = function() executeCmdNormal("v+Ctrl", curEditor, false) end, id = nil }
+  { sc = "Ctrl+v", action = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
 }
 
 function setOrRestoreHotKeys(setNotRestore)
@@ -560,7 +553,7 @@ end
 ----------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
-return {
+local plugin = {
   name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
@@ -583,13 +576,13 @@ return {
     local key =  tostring(event:GetKeyCode())
     local keyNum = tonumber(key)
     
-    key = eventKeyNumToChar(keyNum)
+    key = keymap.keyNumToChar(keyNum)
     
-    if nextCharIsMotionArg and not isKeyModifier(keyNum) then 
+    if cmds.motions.requireNextChar and not isKeyModifier(keyNum) then 
       cmd.arg = tostring(key)
-      nextCharIsMotionArg = false
+      cmds.motions.requireNextChar = false
       _DBGCMD()
-      if validateAndExecuteCommand(editor, cmd) then 
+      if cmds.validateAndExecute(editor, cmd) then 
         cmdLast = table.clone(cmd)
         cmd = newCommand()
       end
@@ -624,7 +617,7 @@ return {
       ide:GetOutputNotebook().errorlog:Erase()
       if keyNum == 13 then
         setMode(kEditMode.normal)
-        parseAndExecuteCommandLine(editor)
+        cmds.cmdLine.execute(editor)
         -- add to current command
       elseif key == "BS" then
         if #curCommand > 1 then
@@ -642,10 +635,10 @@ return {
       end
       return false
     end
+
     ------------------------------------------------------------------------------------------------
-    
     -- not command line, remap key if required
-    if keyRemap[key] then key = keyRemap[key] end
+    if keymap.user[key] then key = keymap.user[key] end
     
     ------------------------------------------------------------------------------------------------
     --    Normal/Visual Modes 
@@ -657,7 +650,7 @@ return {
       if cmd.cmdchar == "" then
         -- lone zero is line start command
         if cmd.count1 == 0 and tonumber(key) == 0 then
-          motions["HOME"](editor)
+          cmds.motions["HOME"](editor)
           cmd = newCommand()
         else
           cmd.count1 = cmd.count1 * 10 + tonumber(key)
@@ -668,7 +661,7 @@ return {
           -- zero after command means home
           key = "0"
           processAsChar = true
-        elseif cmd.count2 == 0 and doesCommandUseNumberAsChar(cmd.cmdchar) then
+        elseif cmd.count2 == 0 and cmds.cmdTakesNumberAsChar(cmd.cmdchar) then
           -- any number after these commands is treated r
           key = tostring(key)
           processAsChar = true
@@ -693,7 +686,7 @@ return {
       cmd.nchar = key
     end
     _DBGCMD()
-    if validateAndExecuteCommand(editor, cmd) then 
+    if cmds.validateAndExecute(editor, cmd) then 
       cmdLast = table.clone(cmd)
       cmd = newCommand()
     end
@@ -708,3 +701,11 @@ return {
   onEditorNew = function(self, editor) setCaret(editor) end,
   onEditorFocusSet = function(self, editor) setCaret(editor) end
 }
+
+function _DBG(...)
+  if DEBUG then 
+    local msg = "" for k,v in ipairs{...} do msg = msg .. tostring(v) .. "\t" end ide:Print(msg)
+  end
+end
+
+return plugin
