@@ -221,8 +221,12 @@ end
 function setSelectionFromPositions(ed, pos1, pos2)
   local min = math.min(pos1, pos2)
   ed:SetSelectionStart(min)
-  ed:SetAnchor(min)
   ed:SetSelectionEnd(math.max(pos1, pos2))
+  -- SetSelectionStart also sets anchor, but we want to preserve ours
+  -- in visual mode
+  if isModeVisual(editMode) then
+    ed:SetAnchor(selectionAnchor)
+  end
 end
 
 function setCmdSelection(ed, cmd, wordwise, linewise)
@@ -253,9 +257,9 @@ local function gotoPosition(ed, pos)
 end
 
 -- uses wxSTC_FIND_.. constants 
-local function searchForAndGoto(ed, text, searchBackwards, redo)
+local function searchForAndGoto(ed, text, nth, searchBackwards, redo)
   local extend = isModeVisual(editMode)
-  local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD
+  local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD  
   minPos = redo == nil and ed:GetCurrentPos() or redo
   local maxPos = searchBackwards and 0 or ed:GetLength()
   local pos = ed:FindText(minPos, maxPos, text, flags)
@@ -263,11 +267,15 @@ local function searchForAndGoto(ed, text, searchBackwards, redo)
     if pos == minPos then 
       -- we're already at the beginning of the text, search again from after text
       if redo == nil then 
-        searchForAndGoto(ed, text, searchBackwards, minPos + #text)
+        searchForAndGoto(ed, text, nth, searchBackwards, minPos + #text)
         return 
       end
     end
     gotoPosition(ed, pos)
+  end
+  if nth > 1 then 
+    nth = nth - 1
+    searchForAndGoto(ed, text, nth, searchBackwards)
   end
 end
 
@@ -358,7 +366,7 @@ cmds.validateAndExecute = function(editor, cmd)
           cmds.motions.requireNextChar = true 
           return false 
         end
-        cmds.motions.execute(cmd.cmdchar, editor, reps)
+        cmds.motions.execute(cmd.cmdchar, editor, math.max(1, cmd.count1))
         return true
       --is not motion
       elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) or isModeVisual(editMode) then
@@ -439,8 +447,8 @@ cmds.motions = {
   ["UP"]      = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps) end,
   ["l"]       = function(ed, reps) callExtendableFunc(ed, "CharRight", reps) end,
   ["RIGHT"]   = function(ed, reps) callExtendableFunc(ed, "CharRight", reps) end,
-  ["f"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, false) end,
-  ["F"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, true) end
+  ["f"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, false) end,
+  ["F"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, true) end
 }
 
 cmds.motions.needArgs = {
