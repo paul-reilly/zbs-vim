@@ -117,6 +117,7 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
 -- forward declarations of function variables
 local hasSelection
 local setCaret
+local cmds -- table
 
 local editMode = nil
 -- bound repetitions of some functions to this value
@@ -124,27 +125,6 @@ local editMode = nil
 local _MAX_REPS = 50 
 local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
 local selectionAnchor = 0
-
--- rough copy of cmd structure used by neovim to keep things extendable
-local function newCommand(searchbuf)
-  local cmd = {
-    opargs = nil,            -- operator arguments
-    prechar = "",            -- prefix character (optional, always 'g')
-    cmdchar = "",            -- command character
-    nchar = "",              -- next command character (optional)
-    ncharC1 = "",            -- first composing character (optional) 
-    ncharC2 = "",            -- second composing character (optional)
-    extrachar = "",          -- yet another character (optional) 
-    opcount = 0,             -- count before an operator
-    count1 = 0,              -- count before command, default 0
-    count2 = 0,              -- count before command, default 1
-    arg = "",                -- extra argument from nv_cmds[]
-    retval = nil,            -- return: CA_* values
-    searchbuf = {},          -- return: pointer to search pattern or NULL
-    origPos = nil            -- pos in document before execution
-  }
-  return cmd
-end
 
 local cmd -- initialised in onRegister
 local cmdLast
@@ -181,8 +161,9 @@ local function setMode(mode, overtype)
   if isModeVisual(mode) and isModeVisual(editMode) then
     editMode = kEditMode.normal
     curEditor:SetEmptySelection(curEditor:GetCurrentPos())
+    selectionAnchor = nil
   else
-    if isModeVisual(mode) then 
+    if isModeVisual(mode) then
       selectionAnchor = curEditor:GetCurrentPos()
       curEditor:SetAnchor(curEditor:GetCurrentPos())
       if mode == kEditMode.visualBlock then 
@@ -195,6 +176,8 @@ local function setMode(mode, overtype)
       elseif mode == kEditMode.visual then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_STREAM)
       elseif mode == kEditMode.visualLine then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
       end
+    else
+      selectionAnchor = nil
     end
     editMode = mode
     if editMode == kEditMode.normal then curEditor:SetEmptySelection(curEditor:GetCurrentPos()) end
@@ -202,6 +185,7 @@ local function setMode(mode, overtype)
   ide:SetStatus("Vim mode: "..mode)
   setCaret(curEditor)
   curEditor:SetOvertype(overtype)
+  cmd.origPos = curEditor:GetCurrentPos()
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -215,6 +199,7 @@ end
 -- so this saves a bit of duplication for working
 -- in visual mode
 local function callExtendableFunc(obj, name, reps)
+  cmd.origPos = curEditor:GetCurrentPos()
   extend = isModeVisual(editMode) and "Extend" or ""
   reps = reps ~= nil and reps or math.max(curNumber, 1)
   for i = 1, reps do
@@ -233,15 +218,34 @@ local function normOrVisFunc(obj, norm, vis)
   end
 end
 
+function setSelectionFromPositions(ed, pos1, pos2)
+  local min = math.min(pos1, pos2)
+  ed:SetSelectionStart(min)
+  ed:SetAnchor(min)
+  ed:SetSelectionEnd(math.max(pos1, pos2))
+end
+
+function setCmdSelection(ed, cmd, wordwise, linewise)
+  if linewise then cmds.motions.execute("j", ed, math.max(0,cmd.count1 - 1)) end
+  setSelectionFromPositions(ed, ed:GetCurrentPos(), cmd.origPos)
+  if linewise then
+    ed:SetSelectionStart(ed:PositionFromLine(ed:LineFromPosition(ed:GetSelectionStart())))
+    local finalLine = ed:LineFromPosition(ed:GetSelectionEnd())
+    local lineStart = ed:PositionFromLine(finalLine)
+    local lineEnd = lineStart + ed:LineLength(finalLine)
+    ed:SetSelectionEnd(lineEnd)
+  elseif wordwise then 
+    local char = ed:GetCharAt(ed:GetSelectionEnd() - 1)
+    while char == 32 do
+      ed:SetSelectionEnd(ed:GetSelectionEnd() - 1)
+      char = ed:GetCharAt(ed:GetSelectionEnd() - 1)
+    end
+  end
+end
+
 local function gotoPosition(ed, pos)
   if isModeVisual(editMode) then
-    if pos < selectionAnchor then
-      ed:SetSelectionStart(pos)
-      ed:SetSelectionEnd(selectionAnchor)
-      ed:SetAnchor(selectionAnchor)
-    else
-      ed:SetSelectionEnd(pos)
-    end
+    setSelectionFromPositions(ed, selectionAnchor, pos)
     ed:SetCurrentPos(pos)
   else
     ed:GotoPos(pos)
@@ -271,24 +275,6 @@ function hasSelection(editor)
   return (editor:GetSelectionStart() ~= editor:GetSelectionEnd())
 end
 
-local function selectCurrentLine(ed, incLineEnd)
-  local line = ed:GetCurrentLine()
-  local lineStart = ed:PositionFromLine(line)
-  local lineEnd = incLineEnd == true and (lineStart + ed:LineLength(line)) 
-                                     or ed:GetLineEndPosition(line)
-  if not hasSelection(ed) then 
-    ed:SetSelectionStart(lineStart)
-    ed:SetSelectionEnd(lineEnd)
-  else
-    -- extend existing selection by line
-    if ed:GetSelectionStart() < lineStart then
-      ed:SetSelectionEnd(lineEnd)
-    else
-      ed:SetSelectionStart(lineStart)
-    end
-  end
-end
-
 local function cancelSelection(ed)
   ed:SetEmptySelection(ed:GetCurrentPos())
   setMode(kEditMode.normal)
@@ -300,20 +286,31 @@ local function restoreCaretPos(ed, cmd)
   end
 end
 
--- for change operator, to match Vim behaviour of only changing word
--- and not trailing space
-local function moveCaretLeftPastSpaces(ed)
-  local char = ed:GetCharAt(ed:GetCurrentPos() - 1)
-  while char == 32 do
-    cmds.motions["h"](ed, 1)
-    char = ed:GetCharAt(ed:GetCurrentPos() - 1)
-  end
-end
-
 ----------------------------------------------------------------------------------------------------
 -- vim commands and logic
 ----------------------------------------------------------------------------------------------------
-local cmds = {}
+cmds = {}
+
+-- rough copy of cmd structure used by neovim to keep things extendable
+cmds.newCommand = function(searchbuf)
+  local cmd = {
+    opargs = nil,            -- operator arguments
+    prechar = "",            -- prefix character (optional, always 'g')
+    cmdchar = "",            -- command character
+    nchar = "",              -- next command character (optional)
+    ncharC1 = "",            -- first composing character (optional) 
+    ncharC2 = "",            -- second composing character (optional)
+    extrachar = "",          -- yet another character (optional) 
+    opcount = 0,             -- count before an operator
+    count1 = 0,              -- count before command, default 0
+    count2 = 0,              -- count before command, default 1
+    arg = "",                -- extra argument from nv_cmds[]
+    retval = nil,            -- return: CA_* values
+    searchbuf = {},          -- return: pointer to search pattern or NULL
+    origPos = nil            -- pos in document before execution
+  }
+  return cmd
+end
 
 cmds.execute = function(cmd, cmdReps, editor, motionReps, linewise, doMotion)
   if doMotion then 
@@ -322,12 +319,19 @@ cmds.execute = function(cmd, cmdReps, editor, motionReps, linewise, doMotion)
       return false 
     end
   end
+  if not isModeVisual(editMode) then 
+    cmd.origPos = editor:GetCurrentPos() 
+  else
+    cmd.origPos = selectionAnchor  
+  end
   editor:BeginUndoAction()
   local iters = math.max(cmdReps, 1)
+  local final = false
   for i = 1, iters do
     if doMotion then cmds.motions[cmd.nchar](editor, motionReps) end
-    local final = i == iters and true or false
-    cmds.operators[cmd.cmdchar](editor, linewise, final, cmd)
+    if i == iters then
+      cmds.operators[cmd.cmdchar](editor, linewise)
+    end
   end
   editor:EndUndoAction()
 end
@@ -335,7 +339,8 @@ end
 cmds.cmdNeedsSecondChar = function(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
-         cmdKey == "y" or cmdKey == "f" or cmdKey == "F"
+         cmdKey == "y" or cmdKey == "f" or cmdKey == "F" or
+         cmdKey == "x"
 end
 
 -- these commands treat numbers as chars, so check with this
@@ -353,20 +358,16 @@ cmds.validateAndExecute = function(editor, cmd)
           cmds.motions.requireNextChar = true 
           return false 
         end
-        editor:BeginUndoAction()
-        local retval = cmds.motions.execute(cmd.cmdchar, editor, reps)
-        --cmds.motions[cmd.cmdchar](editor, false, math.max(cmd.count1, 1))
-        editor:EndUndoAction()
+        cmds.motions.execute(cmd.cmdchar, editor, reps)
         return true
-      elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) then
-        editor:BeginUndoAction()
+      --is not motion
+      elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) or isModeVisual(editMode) then
         if cmds.operators[cmd.cmdchar] then
           cmds.execute(cmd, curNumber, editor, nil, false, false)
         else
           _DBG("Performed from command table!")
           cmds.general.execute(cmd.prechar .. cmd.cmdchar, editor)
         end
-        editor:EndUndoAction()
         return true
       end
     else
@@ -456,25 +457,28 @@ cmds.motions.execute = function(motion, ed, reps)
       return false
     end
   end
+  ed:BeginUndoAction()
   cmds.motions[motion](ed, reps)
+  ed:EndUndoAction()
 end
 
 ----------------------------------------------------------------------------------------------------
 
 cmds.operators = {
-  ["d"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Cut() cancelSelection(ed) end ; end,
-  ["c"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then moveCaretLeftPastSpaces(ed) ; ed:Cut() 
-                                           if linewise then
-                                             cmds.general.execute("O", ed)
-                                           else 
-                                             setMode(kEditMode.insert) end
-                                         end ; end,
-  ["y"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Copy() cancelSelection(ed) end ; end,
-  ["x"]  = function(ed, linewise, final) if linewise then selectCurrentLine(ed, true) end ; 
-                                         if final then ed:Cut() ; cancelSelection(ed) end ; end,
+  ["d"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
+                                  ed:Cut() cancelSelection(ed) 
+                                  end,
+  ["c"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
+                                  ed:Cut() 
+                                  if linewise then
+                                    cmds.general.execute("O", ed)
+                                  else 
+                                    setMode(kEditMode.insert) 
+                                  end ; end,
+  ["y"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
+                                  ed:Copy() cancelSelection(ed) end,
+  ["x"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
+                                         ed:Cut() ; cancelSelection(ed) end,
 }  
 
 ----------------------------------------------------------------------------------------------------
@@ -526,7 +530,9 @@ cmds.general = {
 cmds.general.execute = function(key, editor)
   local retVal
   if cmds.general[key] ~= nil then
+    editor:BeginUndoAction()
     retVal = cmds.general[key](editor)
+    editor:EndUndoAction()
     if key ~= "." then
       lastNumber = curNumber
       lastCommand = key
@@ -566,7 +572,7 @@ local plugin = {
     -- currently need to override ZBS shortcuts here
     --origCtrlReg = 
     --ide:SetHotKey(function() curEditor:Redo() end, "Ctrl+R")
-    cmd = newCommand()
+    cmd = cmds.newCommand()
     ide:SetStatus("Press 'Escape' to enter Vim editing mode")
   end,
 
@@ -584,7 +590,7 @@ local plugin = {
       _DBGCMD()
       if cmds.validateAndExecute(editor, cmd) then 
         cmdLast = table.clone(cmd)
-        cmd = newCommand()
+        cmd = cmds.newCommand()
       end
       return false
     end
@@ -640,7 +646,7 @@ local plugin = {
     
     ------------------------------------------------------------------------------------------------
     --    Normal/Visual Modes 
-    if keyNum == 27 then setMode(kEditMode.normal) ; cmd = newCommand() return false end
+    if keyNum == 27 then setMode(kEditMode.normal) ; cmd = cmds.newCommand() return false end
   
     -- handle numbers
     if tonumber(key) and tonumber(key) < 10 then
@@ -649,7 +655,7 @@ local plugin = {
         -- lone zero is line start command
         if cmd.count1 == 0 and tonumber(key) == 0 then
           cmds.motions["HOME"](editor)
-          cmd = newCommand()
+          cmd = cmds.newCommand()
         else
           cmd.count1 = cmd.count1 * 10 + tonumber(key)
         end
@@ -686,7 +692,7 @@ local plugin = {
     _DBGCMD()
     if cmds.validateAndExecute(editor, cmd) then 
       cmdLast = table.clone(cmd)
-      cmd = newCommand()
+      cmd = cmds.newCommand()
     end
     
     return false
