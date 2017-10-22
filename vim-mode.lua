@@ -21,8 +21,7 @@
 --                i, I, a, A (not stored in buffers for repeating)
 --                # - opens current document in real instance of Vim
 --   
---         visual mode:
---                y, x, c
+--         visual mode, visual block mode
 --   
 --         command line mode:
 --                w, q
@@ -35,8 +34,23 @@
 local DEBUG = false
 local _DBG -- for console output, definition at EOF
 
+-- forward declarations of function variables
+local hasSelection
+local setCaret
+local cmds = {}
+
+local editMode = nil
+-- bound repetitions of some functions to this value
+-- to avoid pasting stuff 100,000 times or whatever
+local _MAX_REPS = 50 
+local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
+local selectionAnchor = 0
+
+local cmd -- initialised in onRegister
+local cmdLast
+
 ----------------------------------------------------------------------------------------------------
-local keymap = {}
+local keymap, curEditor = {}, nil
 
 -- remap any keys you want here
 keymap.user = { ["-"] = "$" }             
@@ -82,23 +96,25 @@ keymap.isKeyModifier = function(keyNum)
 end
 
 keymap.hotKeysToOverride = {
-  { sc = "Ctrl+r", action = function() curEditor:Redo() end,                             id = nil },
-  { sc = "Ctrl+v", action = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
+  { sc = "Ctrl+r", act = function() curEditor:Redo() end,                                 id = nil },
+  { sc = "Ctrl+v", act = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
 }
 
-keymap.overrideHotKeys = function(setNotRestore)
-  --if true then return end
-  if setNotRestore then
+keymap.overrideHotKeys = function(overrideNotRestore)
+  if overrideNotRestore then
     for k, v in pairs(keymap.hotKeysToOverride) do
-      local sc
-      if v.id == nil then v.id, sc = ide:GetHotKey(v.sc) end
-      local ret = ide:SetHotKey(v.action, v.sc)
-      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
+      local sc -- shortcut
+      if v.id == nil then 
+        v.id, sc = ide:GetHotKey(v.sc) 
+        if v.id == nil then ide:Print("Could not get hot key.") return end
+      end
+      local ret = ide:SetHotKey(v.act, v.sc)
+      if ret == nil then ide:Print("Cannot set shortcut: ".. v.sc) end
     end
   else
     for k, v in pairs(keymap.hotKeysToOverride) do
       local ret = ide:SetHotKey(v.id, v.sc)
-      if ret == nil then ide:Print("Cannot set shortcut ".. v.sc) end
+      if ret == nil then ide:Print("Cannot set shortcut: ".. v.sc) end
     end
   end
 end
@@ -112,20 +128,7 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
                              ["while"] = "while", ["for"] = "for", ["if"] = "if", 
                              ["repeat"] = "repeat" }
 
--- forward declarations of function variables
-local hasSelection
-local setCaret
-local cmds = {}
 
-local editMode = nil
--- bound repetitions of some functions to this value
--- to avoid pasting stuff 100,000 times or whatever
-local _MAX_REPS = 50 
-local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
-local selectionAnchor = 0
-
-local cmd -- initialised in onRegister
-local cmdLast
 
 ----------------------------------------------------------------------------------------------------
 local function resetCurrentVars()
@@ -174,6 +177,7 @@ local function setMode(mode, overtype)
       elseif mode == kEditMode.visualLine then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
       end
     else
+      keymap.overrideHotKeys(mode ~= kEditMode.insert)
       selectionAnchor = nil
     end
     editMode = mode
@@ -621,7 +625,7 @@ local plugin = {
     if cmds.motions.requireNextChar and not keymap.isKeyModifier(keyNum) then 
       cmd.arg = tostring(key)
       cmds.motions.requireNextChar = false
-      _DBGCMD()
+      --_DBGCMD()
       if cmds.validateAndExecute(editor, cmd) then 
         cmdLast = table.clone(cmd)
         cmd = cmds.newCommand()
@@ -723,7 +727,7 @@ local plugin = {
     else
       cmd.nchar = key
     end
-    _DBGCMD()
+    --_DBGCMD()
     if cmds.validateAndExecute(editor, cmd) then 
       cmdLast = table.clone(cmd)
       cmd = cmds.newCommand()
