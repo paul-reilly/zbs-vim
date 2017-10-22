@@ -597,7 +597,7 @@ local plugin = {
   name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
-  version = "0.3",
+  version = "0.4",
   dependencies = "1.61",
   
 ----------------------------------------------------------------------------------------------------
