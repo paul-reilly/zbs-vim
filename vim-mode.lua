@@ -32,7 +32,7 @@
 --   
 --   
 ----------------------------------------------------------------------------------------------------
-local DEBUG = true
+local DEBUG = false
 local _DBG -- for console output, definition at EOF
 
 ----------------------------------------------------------------------------------------------------
@@ -104,10 +104,8 @@ keymap.overrideHotKeys = function(setNotRestore)
 end
 
 ----------------------------------------------------------------------------------------------------
--- visualBlock and visualLine are not very useful at the moment
 local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", 
-                    visualLine = "Visual - Line", insert = "Insert - ZeroBrane", 
-                    commandLine = "Command Line" }
+                    insert = "Insert - ZeroBrane", commandLine = "Command Line" }
 
 -- for the Lua equivalent of brace matching with 'end's at some point
 local luaSectionKeywords = { ["local function"] = "local function", ["function"] = "function", 
@@ -117,7 +115,7 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
 -- forward declarations of function variables
 local hasSelection
 local setCaret
-local cmds -- table
+local cmds = {}
 
 local editMode = nil
 -- bound repetitions of some functions to this value
@@ -152,8 +150,7 @@ local function openRealVim(ed)
 end
 
 local function isModeVisual(mode)
-  return ( mode == kEditMode.visual or mode == kEditMode.visualBlock or
-         mode == kEditMode.visualLine )
+  return ( mode == kEditMode.visual or mode == kEditMode.visualBlock )
 end
 
 local function setMode(mode, overtype)
@@ -169,9 +166,9 @@ local function setMode(mode, overtype)
       if mode == kEditMode.visualBlock then 
         -- this works with mulitple selections
         local pos = curEditor:GetCurrentPos()
-        curEditor:SetSelectionStart(origPos)
+        curEditor:SetSelectionStart(selectionAnchor)
         curEditor:SetSelectionMode(wxstc.wxSTC_SEL_RECTANGLE)
-        curEditor:SetRectangularSelectionAnchor(0)
+        curEditor:SetRectangularSelectionAnchor(pos)
         curEditor:SetRectangularSelectionCaret(pos)
       elseif mode == kEditMode.visual then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_STREAM)
       elseif mode == kEditMode.visualLine then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
@@ -185,7 +182,6 @@ local function setMode(mode, overtype)
   ide:SetStatus("Vim mode: "..mode)
   setCaret(curEditor)
   curEditor:SetOvertype(overtype)
-  cmd.origPos = curEditor:GetCurrentPos()
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -198,13 +194,23 @@ end
 -- some wxStyledTextCtrl methods have Extend versions
 -- so this saves a bit of duplication for working
 -- in visual mode
-local function callExtendableFunc(obj, name, reps)
+local function callExtendableFunc(obj, name, reps, canRectExtend)
   cmd.origPos = curEditor:GetCurrentPos()
-  extend = isModeVisual(editMode) and "Extend" or ""
+  local extend = ""
+  if isModeVisual(editMode) then
+    if editMode == kEditMode.visualBlock and canRectExtend then
+      extend = "RectExtend"
+    else
+      extend = "Extend"
+    end
+  end
+  _DBG("extend = ", extend)
   reps = reps ~= nil and reps or math.max(curNumber, 1)
   for i = 1, reps do
     obj[name .. extend](obj)
   end
+  
+  return canRectExtend
 end
 
 local function normOrVisFunc(obj, norm, vis)
@@ -294,6 +300,26 @@ local function restoreCaretPos(ed, cmd)
   end
 end
 
+-- in visualBLock mode, wx uses per line multiple selections so we
+-- remove any carets that are not within a block selection
+local function setBlockCaret(ed)
+  if editMode == kEditMode.visualBlock then
+    local anchorColumn = ed:GetColumn(selectionAnchor)
+    local posColumn = ed:GetColumn(ed:GetCurrentPos())
+    local caretRHS = posColumn >= anchorColumn
+    local numSelections = ed:GetSelections()
+    for i = ed:GetSelections() - 1, 0, -1 do
+      local sel = ed:GetColumn(ed:GetSelectionNCaret(i))
+      -- only keep lines selected that have content within the block here
+      if (i ~= ed:GetMainSelection()) and ((caretRHS and (sel < anchorColumn)) 
+                            or (not caretRHS and (sel < posColumn))) then
+        ed:DropSelectionN(i)
+      end
+    end
+  end
+end
+
+
 ----------------------------------------------------------------------------------------------------
 -- vim commands and logic
 ----------------------------------------------------------------------------------------------------
@@ -347,8 +373,7 @@ end
 cmds.cmdNeedsSecondChar = function(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
-         cmdKey == "y" or cmdKey == "f" or cmdKey == "F" or
-         cmdKey == "x"
+         cmdKey == "y" or cmdKey == "f" or cmdKey == "F"
 end
 
 -- these commands treat numbers as chars, so check with this
@@ -438,15 +463,15 @@ cmds.motions = {
   ["^"]       = function(ed, reps) callExtendableFunc(ed, "VCHome"   , reps) end,
   ["b"]       = function(ed, reps) callExtendableFunc(ed, "WordLeft" , reps) end,
   ["w"]       = function(ed, reps) callExtendableFunc(ed, "WordRight", reps) end,
-  ["h"]       = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps) end,
-  ["BS"]      = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps) end, 
-  ["LEFT"]    = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps) end, 
-  ["j"]       = function(ed, reps) callExtendableFunc(ed, "LineDown" , reps) end,
-  ["DOWN"]    = function(ed, reps) callExtendableFunc(ed, "LineDown" , reps) end,
-  ["k"]       = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps) end,
-  ["UP"]      = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps) end,
-  ["l"]       = function(ed, reps) callExtendableFunc(ed, "CharRight", reps) end,
-  ["RIGHT"]   = function(ed, reps) callExtendableFunc(ed, "CharRight", reps) end,
+  ["h"]       = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps, true) end, 
+  ["BS"]      = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps, true) end,
+  ["LEFT"]    = function(ed, reps) callExtendableFunc(ed, "CharLeft" , reps, true) end,
+  ["j"]       = function(ed, reps) callExtendableFunc(ed, "LineDown" , reps, true) end,
+  ["DOWN"]    = function(ed, reps) callExtendableFunc(ed, "LineDown" , reps, true) end,
+  ["k"]       = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps, true) end,
+  ["UP"]      = function(ed, reps) callExtendableFunc(ed, "LineUp"   , reps, true) end,
+  ["l"]       = function(ed, reps) callExtendableFunc(ed, "CharRight" ,reps, true) end, 
+  ["RIGHT"]   = function(ed, reps) callExtendableFunc(ed, "CharRight" ,reps, true) end,
   ["f"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, false) end,
   ["F"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, true) end
 }
@@ -467,6 +492,7 @@ cmds.motions.execute = function(motion, ed, reps)
   end
   ed:BeginUndoAction()
   cmds.motions[motion](ed, reps)
+  setBlockCaret(ed)
   ed:EndUndoAction()
 end
 
@@ -474,8 +500,7 @@ end
 
 cmds.operators = {
   ["d"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
-                                  ed:Cut() cancelSelection(ed) 
-                                  end,
+                                  ed:Cut() cancelSelection(ed) ; end,
   ["c"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
                                   ed:Cut() 
                                   if linewise then
@@ -484,15 +509,15 @@ cmds.operators = {
                                     setMode(kEditMode.insert) 
                                   end ; end,
   ["y"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
-                                  ed:Copy() cancelSelection(ed) end,
+                                  ed:Copy() cancelSelection(ed) ; end,
   ["x"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
-                                         ed:Cut() ; cancelSelection(ed) end,
+                                  ed:Cut() ; cancelSelection(ed) ; end,
 }  
 
 ----------------------------------------------------------------------------------------------------
 cmds.general = { 
   ["v"]      = function(ed) setMode(kEditMode.visual, false) end,
-  ["V"]      = function(ed) setMode(kEditMode.visualLine, false) end,
+  ["V"]      = function(ed) setMode(kEditMode.visualBlock, false) end,
   ["v+Ctrl"] = function(ed) setMode(kEditMode.visualBlock, false) end,
   ["i"]      = function(ed) setMode(kEditMode.insert, false) end,
   ["I"]      = function(ed) ed:Home() ; setMode(kEditMode.insert, false) end,
@@ -509,7 +534,6 @@ cmds.general = {
                             else
                               callExtendableFunc(ed, "DocumentEnd")
                             end ; end,
-  ["x"]      = function(ed) normOrVisFunc(ed, "DeleteBack", "Cut") end,
   ["o"]      = function(ed) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
                             ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
   ["O"]      = function(ed) ed:LineUp()
@@ -529,10 +553,12 @@ cmds.general = {
   ["r+Ctrl"] = function(ed) ed:Redo() end,
   ["."]      = function(ed) curNumber = lastNumber ; cmd = cmdLast ; 
                             cmds.validateAndExecute(ed, cmd) end,
-  ["DEL"]    = function(ed) local pos = ed:GetCurrentPos()
-                            ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end,
+  ["DEL"]    = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
+                            ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end end,
+  ["x"]      = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
+                            ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end end,
   ["#"]      = function(ed) openRealVim(ed) end,
-  ["Q"]      = function(ed) ed:SetRectangularSelectionCaret(ed:GetCurrentPos()+1) end
+  ["Q"]      = function(ed) ed:SetRectangularSonCaret(ed:GetCurrentPos()+1) end
 }
 
 cmds.general.execute = function(key, editor)
