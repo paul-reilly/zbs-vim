@@ -17,9 +17,10 @@
 --   
 --         normal mode:
 --                [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p, {, }, f, F
---                $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$
+--                $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$, m, '
 --                i, I, a, A (not stored in buffers for repeating)
 --                # - opens current document in real instance of Vim
+--                m# - deletes all markers
 --   
 --         visual mode, visual block mode
 --   
@@ -36,8 +37,10 @@ local _DBG -- for console output, definition at EOF
 
 -- forward declarations of function variables
 local hasSelection
+local selectCurrentLine
 local setCaret
 local cmds = {}
+local markers = {}
 
 local editMode = nil
 -- bound repetitions of some functions to this value
@@ -50,7 +53,7 @@ local cmd -- initialised in onRegister
 local cmdLast
 
 ----------------------------------------------------------------------------------------------------
-local keymap, curEditor = {}, nil
+local keymap = {}
 
 -- remap any keys you want here
 keymap.user = { ["-"] = "$" }             
@@ -120,7 +123,8 @@ keymap.overrideHotKeys = function(overrideNotRestore)
 end
 
 ----------------------------------------------------------------------------------------------------
-local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block", 
+local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block",
+                    visualLine = "Visual - Line",
                     insert = "Insert - ZeroBrane", commandLine = "Command Line" }
 
 -- for the Lua equivalent of brace matching with 'end's at some point
@@ -129,15 +133,24 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
                              ["repeat"] = "repeat" }
 
 
-
 ----------------------------------------------------------------------------------------------------
 local function resetCurrentVars()
   curNumber = 0
   curCommand = ""
 end
 
-function table.clone(org)
-  return {table.unpack(org)}
+function shallowcopy(orig)
+    local orig_type = type(orig)
+    local copy
+    if orig_type == 'table' then
+        copy = {}
+        for orig_key, orig_value in pairs(orig) do
+            copy[orig_key] = orig_value
+        end
+    else -- number, string, boolean, etc
+        copy = orig
+    end
+    return copy
 end
 
 -- must have vim in path
@@ -153,35 +166,50 @@ local function openRealVim(ed)
 end
 
 local function isModeVisual(mode)
-  return ( mode == kEditMode.visual or mode == kEditMode.visualBlock )
+  return ( mode == kEditMode.visual or mode == kEditMode.visualBlock or 
+           mode == kEditMode.visualLine )
 end
 
 local function setMode(mode, overtype)
   if not curEditor then editMode = mode return end
+  local pos = curEditor:GetCurrentPos()
   if isModeVisual(mode) and isModeVisual(editMode) then
     editMode = kEditMode.normal
-    curEditor:SetEmptySelection(curEditor:GetCurrentPos())
+    curEditor:SetEmptySelection(pos)
     selectionAnchor = nil
   else
     if isModeVisual(mode) then
-      selectionAnchor = curEditor:GetCurrentPos()
-      curEditor:SetAnchor(curEditor:GetCurrentPos())
+      selectionAnchor = pos
+      curEditor:SetAnchor(pos)
+      
       if mode == kEditMode.visualBlock then 
-        -- this works with mulitple selections
-        local pos = curEditor:GetCurrentPos()
+        -- this works with multiple selections
         curEditor:SetSelectionStart(selectionAnchor)
         curEditor:SetSelectionMode(wxstc.wxSTC_SEL_RECTANGLE)
         curEditor:SetRectangularSelectionAnchor(pos)
         curEditor:SetRectangularSelectionCaret(pos)
+        
       elseif mode == kEditMode.visual then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_STREAM)
-      elseif mode == kEditMode.visualLine then curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
+        
+      elseif mode == kEditMode.visualLine then 
+        -- TODO: make this work with wx line select mode
+        local line = curEditor:GetCurrentLine()
+        local lineStart = curEditor:PositionFromLine(line)
+        curEditor:SetRectangularSelectionAnchor(lineStart)
+        curEditor:SetRectangularSelectionAnchor(lineStart)
+        curEditor:SetCurrentPos(lineStart)
+        curEditor:SetSelectionMode(wxstc.wxSTC_SEL_LINES)
+        curEditor:SetSelectionStart(lineStart)
+        curEditor:SetAnchor(lineStart)
+        
+        selectionAnchor = lineStart
       end
     else
       keymap.overrideHotKeys(mode ~= kEditMode.insert)
       selectionAnchor = nil
     end
     editMode = mode
-    if editMode == kEditMode.normal then curEditor:SetEmptySelection(curEditor:GetCurrentPos()) end
+    if editMode == kEditMode.normal then curEditor:SetEmptySelection(pos) end
   end
   ide:SetStatus("Vim mode: "..mode)
   setCaret(curEditor)
@@ -202,13 +230,12 @@ local function callExtendableFunc(obj, name, reps, canRectExtend)
   cmd.origPos = curEditor:GetCurrentPos()
   local extend = ""
   if isModeVisual(editMode) then
-    if editMode == kEditMode.visualBlock and canRectExtend then
+    if editMode == (kEditMode.visualBlock or editMode == kEditMode.visualLine) and canRectExtend then
       extend = "RectExtend"
     else
       extend = "Extend"
     end
   end
-  _DBG("extend = ", extend)
   reps = reps ~= nil and reps or math.max(curNumber, 1)
   for i = 1, reps do
     obj[name .. extend](obj)
@@ -239,6 +266,8 @@ function setSelectionFromPositions(ed, pos1, pos2)
   end
 end
 
+-- called before executing a cmd, so that selection is correct
+-- for wx Cut/Copy methods
 function setCmdSelection(ed, cmd, wordwise, linewise)
   if linewise then cmds.motions.execute("j", ed, math.max(0,cmd.count1 - 1)) end
   setSelectionFromPositions(ed, ed:GetCurrentPos(), cmd.origPos)
@@ -257,6 +286,7 @@ function setCmdSelection(ed, cmd, wordwise, linewise)
   end
 end
 
+-- set caret at position, extending the selection in visual modes
 local function gotoPosition(ed, pos)
   if isModeVisual(editMode) then
     setSelectionFromPositions(ed, selectionAnchor, pos)
@@ -266,7 +296,7 @@ local function gotoPosition(ed, pos)
   end
 end
 
--- uses wxSTC_FIND_.. constants 
+-- used with f and F cmds so far 
 local function searchForAndGoto(ed, text, nth, searchBackwards, redo)
   local extend = isModeVisual(editMode)
   local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD  
@@ -298,16 +328,10 @@ local function cancelSelection(ed)
   setMode(kEditMode.normal)
 end
 
-local function restoreCaretPos(ed, cmd)
-  if cmd.origPos ~= nil then
-    ed:SetCurrentPos(cmd.origPos)
-  end
-end
-
 -- in visualBLock mode, wx uses per line multiple selections so we
 -- remove any carets that are not within a block selection
 local function setBlockCaret(ed)
-  if editMode == kEditMode.visualBlock then
+  if editMode == kEditMode.visualBlock or editMode == kEditMode.visualLine then
     local anchorColumn = ed:GetColumn(selectionAnchor)
     local posColumn = ed:GetColumn(ed:GetCurrentPos())
     local caretRHS = posColumn >= anchorColumn
@@ -322,7 +346,6 @@ local function setBlockCaret(ed)
     end
   end
 end
-
 
 ----------------------------------------------------------------------------------------------------
 -- vim commands and logic
@@ -350,6 +373,7 @@ cmds.newCommand = function(searchbuf)
   return cmd
 end
 
+-- doesn't validate cmd, call validateAndExecute if not sure
 cmds.execute = function(cmd, cmdReps, editor, motionReps, linewise, doMotion)
   if doMotion then 
     if cmd.arg == "" and cmds.motions.needArgs[cmd.nchar] then 
@@ -385,7 +409,7 @@ cmds.cmdTakesNumberAsChar = function(cmdKey)
   return cmdKey == "f" or cmdKey == "F"
 end
 
--- called from key event, executes on when cmd has valid structure
+-- called from key event, calls execute when cmd has valid structure
 cmds.validateAndExecute = function(editor, cmd)
   if cmd.cmdchar ~= "" then
     curNumber = cmd.count1
@@ -424,7 +448,6 @@ cmds.validateAndExecute = function(editor, cmd)
           end
         end
       end
-      _DBG("Performed from command table.")
       cmds.general.execute(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
       return true
     end
@@ -477,14 +500,23 @@ cmds.motions = {
   ["l"]       = function(ed, reps) callExtendableFunc(ed, "CharRight" ,reps, true) end, 
   ["RIGHT"]   = function(ed, reps) callExtendableFunc(ed, "CharRight" ,reps, true) end,
   ["f"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, false) end,
-  ["F"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, true) end
+  ["F"]       = function(ed, reps) searchForAndGoto(ed, cmd.arg, reps, true) end,
+  ["m"]       = function(ed, reps) if cmd.arg == "'" then return end -- ' is special marker
+                                   if cmd.arg == "#" then ed:MarkerDeleteAll(86) return end
+                                   local pos = ed:GetCurrentPos()
+                                   markers[cmd.arg] = ed:MarkerAdd(ed:LineFromPosition(pos), 86) 
+                                   ed:MarkerDefine(86, wxstc.wxSTC_MARK_DOTDOTDOT) end,
+  ["'"]       = function(ed, reps) if cmd.arg == "'" or markers[cmd.arg] == nil then return end
+                                   local line = ed:MarkerLineFromHandle(markers[cmd.arg])
+                                   gotoPosition(ed, ed:PositionFromLine(line)) end
 }
 
 cmds.motions.needArgs = {
   ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true
 }
 
--- this is checked for in onEditorKeyDown and cmd.arg gets the next char
+-- this is checked for in onEditorKeyDown - cmd.arg gets the next char
+-- when true
 cmds.motions.requireNextChar = false
 
 cmds.motions.execute = function(motion, ed, reps) 
@@ -519,9 +551,9 @@ cmds.operators = {
 }  
 
 ----------------------------------------------------------------------------------------------------
-cmds.general = { 
+cmds.general = {
   ["v"]      = function(ed) setMode(kEditMode.visual, false) end,
-  ["V"]      = function(ed) setMode(kEditMode.visualBlock, false) end,
+  ["V"]      = function(ed) setMode(kEditMode.visualLine, false) end,
   ["v+Ctrl"] = function(ed) setMode(kEditMode.visualBlock, false) end,
   ["i"]      = function(ed) setMode(kEditMode.insert, false) end,
   ["I"]      = function(ed) ed:Home() ; setMode(kEditMode.insert, false) end,
@@ -555,8 +587,11 @@ cmds.general = {
   ["zb"]     = function(ed) local pos = ed:GetCurrentLine() - ed:LinesOnScreen() + 1
                             ed:SetFirstVisibleLine(math.max(0, pos)) ; end,
   ["r+Ctrl"] = function(ed) ed:Redo() end,
-  ["."]      = function(ed) curNumber = lastNumber ; cmd = cmdLast ; 
-                            cmds.validateAndExecute(ed, cmd) end,
+  ["."]      = function(ed) curNumber = lastNumber ; 
+                            if cmdLast ~= nil then
+                              cmd = cmdLast
+                              cmds.validateAndExecute(ed, cmd)
+                            end ; end,
   ["DEL"]    = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
                             ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end end,
   ["x"]      = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
@@ -601,15 +636,12 @@ local plugin = {
   name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
-  version = "0.4",
+  version = "0.5",
   dependencies = "1.61",
   
 ----------------------------------------------------------------------------------------------------
   onRegister = function(self)
     setMode(kEditMode.insert)
-    -- currently need to override ZBS shortcuts here
-    --origCtrlReg = 
-    --ide:SetHotKey(function() curEditor:Redo() end, "Ctrl+R")
     cmd = cmds.newCommand()
     ide:SetStatus("Press 'Escape' to enter Vim editing mode")
   end,
@@ -627,7 +659,7 @@ local plugin = {
       cmds.motions.requireNextChar = false
       --_DBGCMD()
       if cmds.validateAndExecute(editor, cmd) then 
-        cmdLast = table.clone(cmd)
+        cmdLast = shallowcopy(cmd)
         cmd = cmds.newCommand()
       end
       return false
@@ -652,8 +684,8 @@ local plugin = {
       end
     end
 
-    
     if keymap.isKeyModifier(keyNum) then return false end   
+
     ------------------------------------------------------------------------------------------------
     --         Command Line Mode        
     if editMode == kEditMode.commandLine then
@@ -729,8 +761,10 @@ local plugin = {
     end
     --_DBGCMD()
     if cmds.validateAndExecute(editor, cmd) then 
-      cmdLast = table.clone(cmd)
+      cmdLast = shallowcopy(cmd)
+      _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
       cmd = cmds.newCommand()
+      _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
     end
     
     return false
