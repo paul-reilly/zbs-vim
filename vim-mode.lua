@@ -597,7 +597,6 @@ cmds.general = {
   ["x"]      = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
                             ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end end,
   ["#"]      = function(ed) openRealVim(ed) end,
-  ["Q"]      = function(ed) ed:SetRectangularSonCaret(ed:GetCurrentPos()+1) end
 }
 
 cmds.general.execute = function(key, editor)
