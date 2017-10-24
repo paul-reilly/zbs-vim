@@ -46,7 +46,7 @@ local editMode = nil
 -- bound repetitions of some functions to this value
 -- to avoid pasting stuff 100,000 times or whatever
 local _MAX_REPS = 50 
-local curEditor, curNumber, curCommand, lastNumber, lastCommand = nil, 0, "", 0, ""
+local curEditor = nil
 local selectionAnchor = 0
 
 local cmd -- initialised in onRegister
@@ -134,11 +134,6 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
 
 
 ----------------------------------------------------------------------------------------------------
-local function resetCurrentVars()
-  curNumber = 0
-  curCommand = ""
-end
-
 function shallowcopy(orig)
     local orig_type = type(orig)
     local copy
@@ -236,23 +231,11 @@ local function callExtendableFunc(obj, name, reps, canRectExtend)
       extend = "Extend"
     end
   end
-  reps = reps ~= nil and reps or math.max(curNumber, 1)
+  reps = math.max(1, (reps or 1))
   for i = 1, reps do
     obj[name .. extend](obj)
   end
-  
   return canRectExtend
-end
-
-local function normOrVisFunc(obj, norm, vis)
-  if editMode == kEditMode.visual then
-    obj[vis](obj)
-  else
-    local reps = math.max(curNumber, 1)
-    for i = 1, reps do
-      obj[norm](obj)
-    end
-  end
 end
 
 function setSelectionFromPositions(ed, pos1, pos2)
@@ -412,8 +395,7 @@ end
 
 -- called from key event, calls execute when cmd has valid structure
 cmds.validateAndExecute = function(editor, cmd)
-  if cmd.cmdchar ~= "" then
-    curNumber = cmd.count1
+  if cmd.cmdchar ~= "" then 
     if cmd.nchar == "" then
       if cmds.motions[cmd.cmdchar] then
         if cmds.motions.needArgs[cmd.cmdchar] and cmd.arg == "" then 
@@ -425,10 +407,10 @@ cmds.validateAndExecute = function(editor, cmd)
       --is not motion
       elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) or isModeVisual(editMode) then
         if cmds.operators[cmd.cmdchar] then
-          cmds.execute(cmd, curNumber, editor, nil, false, false)
+          cmds.execute(cmd, cmd.count1, editor, nil, false, false)
         else
           _DBG("Performed from command table!")
-          cmds.general.execute(cmd.prechar .. cmd.cmdchar, editor)
+          cmds.general.execute(cmd.prechar .. cmd.cmdchar, editor, cmd.count1)
         end
         return true
       end
@@ -437,19 +419,19 @@ cmds.validateAndExecute = function(editor, cmd)
       if cmds.operators[cmd.cmdchar] then
         -- check if marker or find cmd 
         if cmds.motions.needArgs[cmd.cmdchar] then
-          cmds.execute(cmd, curNumber, editor, nil, false, false)
+          cmds.execute(cmd, cmd.count1, editor, nil, false, false)
           return true
         elseif cmds.motions[cmd.nchar] then
-          cmds.execute(cmd, curNumber, editor, math.max(cmd.count2, 1), false, true)
+          cmds.execute(cmd, cmd.count1, editor, math.max(cmd.count2, 1), false, true)
           return true
         else
           if cmd.nchar == cmd.cmdchar then
-            cmds.execute(cmd, curNumber, editor, nil, true, false)
+            cmds.execute(cmd, cmd.count1, editor, nil, true, false)
             return true
           end
         end
       end
-      cmds.general.execute(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor)
+      cmds.general.execute(cmd.prechar .. cmd.cmdchar .. cmd.nchar, editor, cmd.count1)
       return true
     end
   end
@@ -464,12 +446,11 @@ cmds.cmdLine = {
 }
 
 cmds.cmdLine.execute = function(editor)
-  for i = 1, #curCommand do
-    if cmds.cmdLine[curCommand:sub(i,i)] then
-      cmds.cmdLine[curCommand:sub(i,i)](editor)
+  for i = 1, #cmd.cmdchar do
+    if cmds.cmdLine[cmd.cmdchar:sub(i,i)] then
+      cmds.cmdLine[cmd.cmdchar:sub(i,i)](editor)
     end
   end
-  resetCurrentVars()
 end
 
 ----------------------------------------------------------------------------------------------------
@@ -541,7 +522,7 @@ cmds.operators = {
   ["c"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
                                   ed:Cut() 
                                   if linewise then
-                                    cmds.general.execute("O", ed)
+                                    cmds.general.execute("O", ed, 1)
                                   else 
                                     setMode(kEditMode.insert) 
                                   end ; end,
@@ -553,65 +534,59 @@ cmds.operators = {
 
 ----------------------------------------------------------------------------------------------------
 cmds.general = {
-  ["v"]      = function(ed) setMode(kEditMode.visual, false) end,
-  ["V"]      = function(ed) setMode(kEditMode.visualLine, false) end,
-  ["v+Ctrl"] = function(ed) setMode(kEditMode.visualBlock, false) end,
-  ["i"]      = function(ed) setMode(kEditMode.insert, false) end,
-  ["I"]      = function(ed) ed:Home() ; setMode(kEditMode.insert, false) end,
-  ["a"]      = function(ed) setMode(kEditMode.insert, false) end,
-  ["A"]      = function(ed) ed:LineEnd() ; setMode(kEditMode.insert, false) end,
-  ["R"]      = function(ed) setMode(kEditMode.insert, true) end,
-  ["gg"]     = function(ed) callExtendableFunc(ed, "DocumentStart") end,
-  ["gt"]     = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
-                              ID.NOTEBOOKTABNEXT)) end,
-  ["gT"]     = function(ed) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
-                              ID.NOTEBOOKTABPREV)) end,
-  ["G"]      = function(ed) if curNumber > 0 then
-                              gotoPosition(ed, ed:PositionFromLine(curNumber - 1))
-                            else
-                              callExtendableFunc(ed, "DocumentEnd")
-                            end ; end,
-  ["o"]      = function(ed) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
-                            ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
-  ["O"]      = function(ed) ed:LineUp()
-                            ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
-                            ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
-  ["Y"]      = function(ed) cmd.cmdchar = "y"
-                            cmds.execute(cmd, curNumber, ed, nil, true, false) end,
-  ["p"]      = function(ed) for i=1, math.min(math.max(curNumber, 1), _MAX_REPS) do 
-                              ed:Paste() 
-                            end ; end,
-  ["u"]      = function(ed) for i=1, math.max(curNumber, 1) do ed:Undo() end ; end,
-  ["zz"]     = function(ed) ed:VerticalCentreCaret() end,
-  ["z."]     = function(ed) ed:VerticalCentreCaret() end,
-  ["zt"]     = function(ed) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
-  ["zb"]     = function(ed) local pos = ed:GetCurrentLine() - ed:LinesOnScreen() + 1
-                            ed:SetFirstVisibleLine(math.max(0, pos)) ; end,
-  ["r+Ctrl"] = function(ed) ed:Redo() end,
-  ["."]      = function(ed) curNumber = lastNumber ; 
-                            if cmdLast ~= nil then
-                              cmd = cmdLast
-                              cmds.validateAndExecute(ed, cmd)
-                            end ; end,
-  ["DEL"]    = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
-                            ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end end,
-  ["x"]      = function(ed) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
-                            ed:DeleteRange(pos, math.min(math.max(curNumber, 1), _MAX_REPS)) end end,
-  ["#"]      = function(ed) openRealVim(ed) end,
+  ["v"]      = function(ed, num) setMode(kEditMode.visual, false) end,
+  ["V"]      = function(ed, num) setMode(kEditMode.visualLine, false) end,
+  ["v+Ctrl"] = function(ed, num) setMode(kEditMode.visualBlock, false) end,
+  ["i"]      = function(ed, num) setMode(kEditMode.insert, false) end,
+  ["I"]      = function(ed, num) ed:Home() ; setMode(kEditMode.insert, false) end,
+  ["a"]      = function(ed, num) setMode(kEditMode.insert, false) end,
+  ["A"]      = function(ed, num) ed:LineEnd() ; setMode(kEditMode.insert, false) end,
+  ["R"]      = function(ed, num) setMode(kEditMode.insert, true) end,
+  ["gg"]     = function(ed, num) callExtendableFunc(ed, "DocumentStart", num) end,
+  ["gt"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
+                                  ID.NOTEBOOKTABNEXT)) end,
+  ["gT"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
+                                  ID.NOTEBOOKTABPREV)) end,
+  ["G"]      = function(ed, num) if num > 0 then
+                                   gotoPosition(ed, ed:PositionFromLine(num - 1))
+                                 else
+                                   callExtendableFunc(ed, "DocumentEnd", num)
+                                 end ; end,
+  ["o"]      = function(ed, num) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
+                                 ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
+  ["O"]      = function(ed, num) ed:LineUp()
+                                 ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
+                                 ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
+  ["Y"]      = function(ed, num) cmd.cmdchar = "y"
+                                 cmds.execute(cmd, num, ed, nil, true, false) end,
+  ["p"]      = function(ed, num) for i=1, math.min(math.max(num, 1), _MAX_REPS) do 
+                                   ed:Paste() 
+                                 end ; end,
+  ["u"]      = function(ed, num) for i=1, math.max(num, 1) do ed:Undo() end ; end,
+  ["zz"]     = function(ed, num) ed:VerticalCentreCaret() end,
+  ["z."]     = function(ed, num) ed:VerticalCentreCaret() end,
+  ["zt"]     = function(ed, num) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
+  ["zb"]     = function(ed, num) local pos = ed:GetCurrentLine() - ed:LinesOnScreen() + 1
+                                 ed:SetFirstVisibleLine(math.max(0, pos)) ; end,
+  ["r+Ctrl"] = function(ed, num) ed:Redo() end,
+  ["."]      = function(ed, num) if cmdLast ~= nil then
+                                   cmd = cmdLast
+                                   cmds.validateAndExecute(ed, cmd)
+                                 end ; end,
+  ["DEL"]    = function(ed, num) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
+                                 ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
+  ["x"]      = function(ed, num) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
+                                 ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
+  ["#"]      = function(ed, num) openRealVim(ed) end,
 }
 
-cmds.general.execute = function(key, editor)
+cmds.general.execute = function(key, editor, num)
   local retVal
   if cmds.general[key] ~= nil then
     editor:BeginUndoAction()
-    retVal = cmds.general[key](editor)
+    retVal = cmds.general[key](editor, num)
     editor:EndUndoAction()
-    if key ~= "." then
-      lastNumber = curNumber
-      lastCommand = key
-    end
   end
-  resetCurrentVars()
   -- retVal could be nil, false or true so
   return (retVal == true and true or false)
 end
@@ -629,6 +604,12 @@ local function _DBGCMD()
   _DBG("------------------------------------------")
 end
   
+local function resetCmd()
+  cmdLast = shallowcopy(cmd)
+  _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
+  cmd = cmds.newCommand()
+  _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
+end
 ----------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
@@ -659,8 +640,7 @@ local plugin = {
       cmds.motions.requireNextChar = false
       --_DBGCMD()
       if cmds.validateAndExecute(editor, cmd) then 
-        cmdLast = shallowcopy(cmd)
-        cmd = cmds.newCommand()
+        resetCmd()
       end
       return false
     end
@@ -668,6 +648,7 @@ local plugin = {
     if editMode == kEditMode.insert then
       if keyNum == 27 then 
         setMode(kEditMode.normal)
+        cmd = cmds.newCommand()
         return false
       else
         -- in insert mode always pass keys to editor
@@ -678,8 +659,10 @@ local plugin = {
       if editMode ~= kEditMode.commandLine and keyNum == 59 and wx.wxGetKeyState(wx.WXK_SHIFT) then
         setMode(kEditMode.commandLine)
         ide:SetStatus(":")
-        resetCurrentVars()
-        curCommand = ":"
+        -- don't use resetCmd here because we don't 
+        -- want to lose last cmd
+        cmd = cmds.newCommand(); 
+        cmd.cmdchar = ":"
         return false
       end
     end
@@ -692,20 +675,21 @@ local plugin = {
       if keyNum == 13 then
         setMode(kEditMode.normal)
         cmds.cmdLine.execute(editor)
+        resetCmd()
+        return false
         -- add to current command
       elseif key == "BS" then
-        if #curCommand > 1 then
-          curCommand = curCommand:sub(1, #curCommand - 1)
-          ide:SetStatus(curCommand)
+        if #cmd.cmdchar > 1 then
+          cmd.cmdchar = cmd.cmdchar:sub(1, cmd.cmdchar - 1)
+          ide:SetStatus(cmd.cmdchar)
         else
           setMode(kEditMode.normal)
         end
       elseif keyNum == 27 then
-        resetCurrentVars()
         setMode(kEditMode.normal)
       else
-        curCommand = curCommand .. key
-        ide:SetStatus(curCommand)
+        cmd.cmdchar = cmd.cmdchar .. key
+        ide:SetStatus(cmd.cmdchar)
       end
       return false
     end
@@ -725,7 +709,8 @@ local plugin = {
         -- lone zero is line start command
         if cmd.count1 == 0 and tonumber(key) == 0 then
           cmds.motions["HOME"](editor)
-          cmd = cmds.newCommand()
+          resetCmd()
+          return false
         else
           cmd.count1 = cmd.count1 * 10 + tonumber(key)
         end
@@ -761,10 +746,7 @@ local plugin = {
     end
     --_DBGCMD()
     if cmds.validateAndExecute(editor, cmd) then 
-      cmdLast = shallowcopy(cmd)
-      _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
-      cmd = cmds.newCommand()
-      _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
+      resetCmd()
     end
     
     return false
