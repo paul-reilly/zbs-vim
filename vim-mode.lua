@@ -312,10 +312,11 @@ local function searchForAndGoto(ed, text, nth, searchBackwards, redo)
       end
     end
     gotoPosition(ed, pos)
-  end
-  if nth > 1 then 
-    nth = nth - 1
-    searchForAndGoto(ed, text, nth, searchBackwards)
+    if nth > 1 then 
+      nth = nth - 1
+      searchForAndGoto(ed, text, nth, searchBackwards)
+      return
+    end
   end
 end
 
