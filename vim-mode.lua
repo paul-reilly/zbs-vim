@@ -19,6 +19,7 @@
 --                [num]h, j, k, l, yy, G, dd, dw, db, cc, cw, cb, x, b, w, p, {, }, f, F
 --                $, ^, 0, gg, gt, gT, z., zz, zt, zb, d^, d0, d$, c^, c0, c$, m, '
 --                i, I, a, A (not stored in buffers for repeating)
+--                supports 'i' for inside, eg ci" or di" for change/delete text inside quotes
 --                # - opens current document in real instance of Vim
 --                m# - deletes all markers
 --   
@@ -33,12 +34,13 @@
 --   
 ----------------------------------------------------------------------------------------------------
 local DEBUG = false
-local _DBG -- for console output, definition at EOF
+local _DBG -- (...) for console output, definition at EOF
 
 -- forward declarations of function variables
 local hasSelection
 local selectCurrentLine
 local setCaret
+local resetCmd
 local cmds = {}
 local markers = {}
 
@@ -46,7 +48,7 @@ local editMode = nil
 -- bound repetitions of some functions to this value
 -- to avoid pasting stuff 100,000 times or whatever
 local _MAX_REPS = 50 
-local curEditor = nil
+local curEditor = nil -- set in onEditorKeyDown
 local selectionAnchor = 0
 
 local cmd -- initialised in onRegister
@@ -67,7 +69,7 @@ keymap.shift = {["0"] = ")", ["1"] = "!", ["2"]  = "\"", ["3"] = "£", ["4"] = "
                 ["/"] = "?"
 }
 
-keymap.sys = {["8"] = "BS",     ["9"] = "TAB",     ["92"]  = "\\",   ["127"] = "DEL",     
+keymap.sys = {["8"]   = "BS",   ["9"]   = "TAB",   ["92"]  = "\\",   ["127"] = "DEL",     
               ["312"] = "END",  ["313"] = "HOME",  ["314"] = "LEFT", ["315"] = "UP",   
               ["316"] = "RIGHT",["317"] = "DOWN",  ["366"] = "PGUP", ["367"] = "PGDOWN"}
 
@@ -132,20 +134,26 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
                              ["while"] = "while", ["for"] = "for", ["if"] = "if", 
                              ["repeat"] = "repeat" }
 
+local m_brace = { left = "{", right = "}" }
+local m_bracket = { left = "(", right = ")" }
+local m_square = { left = "[", right = "]" }
+local match = { ["{"] = m_brace,  ["}"] = m_brace, ["("] = m_bracket, [")"] = m_bracket, 
+                ["["] = m_square, ["]"] = m_square }
+
 
 ----------------------------------------------------------------------------------------------------
 function shallowcopy(orig)
-    local orig_type = type(orig)
-    local copy
-    if orig_type == 'table' then
-        copy = {}
-        for orig_key, orig_value in pairs(orig) do
-            copy[orig_key] = orig_value
-        end
-    else -- number, string, boolean, etc
-        copy = orig
+  local orig_type = type(orig)
+  local copy
+  if orig_type == 'table' then
+    copy = {}
+    for orig_key, orig_value in pairs(orig) do
+      copy[orig_key] = orig_value
     end
-    return copy
+  else -- number, string, boolean, etc
+    copy = orig
+  end
+  return copy
 end
 
 -- must have vim in path
@@ -231,7 +239,7 @@ local function callExtendableFunc(obj, name, reps, canRectExtend)
       extend = "Extend"
     end
   end
-  reps = math.max(1, (reps or 1))
+  reps = reps or 1
   for i = 1, reps do
     obj[name .. extend](obj)
   end
@@ -252,6 +260,7 @@ end
 -- called before executing a cmd, so that selection is correct
 -- for wx Cut/Copy methods
 function setCmdSelection(ed, cmd, wordwise, linewise)
+  _DBG("setCmdSelection")
   if linewise then cmds.motions.execute("j", ed, math.max(0,cmd.count1 - 1)) end
   setSelectionFromPositions(ed, ed:GetCurrentPos(), cmd.origPos)
   if linewise then
@@ -260,11 +269,13 @@ function setCmdSelection(ed, cmd, wordwise, linewise)
     local lineStart = ed:PositionFromLine(finalLine)
     local lineEnd = lineStart + ed:LineLength(finalLine)
     ed:SetSelectionEnd(lineEnd)
-  elseif wordwise then 
+  elseif wordwise then
     local char = ed:GetCharAt(ed:GetSelectionEnd() - 1)
-    while char == 32 do
-      ed:SetSelectionEnd(ed:GetSelectionEnd() - 1)
-      char = ed:GetCharAt(ed:GetSelectionEnd() - 1)
+    if cmd.keepSpaces == nil then
+      while char == 32 do
+        ed:SetSelectionEnd(ed:GetSelectionEnd() - 1)
+        char = ed:GetCharAt(ed:GetSelectionEnd() - 1)
+      end
     end
   end
 end
@@ -279,8 +290,9 @@ local function gotoPosition(ed, pos)
   end
 end
 
--- used with f and F cmds so far 
-local function searchForAndGoto(ed, text, nth, searchBackwards, redo)
+local searchForAndGoto
+
+local function find(ed, text, searchBackwards, redo)
   local extend = isModeVisual(editMode)
   local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD  
   minPos = redo == nil and ed:GetCurrentPos() or redo
@@ -290,17 +302,26 @@ local function searchForAndGoto(ed, text, nth, searchBackwards, redo)
     if pos == minPos then 
       -- we're already at the beginning of the text, search again from after text
       if redo == nil then 
-        searchForAndGoto(ed, text, nth, searchBackwards, minPos + #text)
-        return 
+        find(ed, text, searchBackwards, minPos + #text)
+        return pos
       end
     end
-    gotoPosition(ed, pos)
-    if nth > 1 then 
-      nth = nth - 1
-      searchForAndGoto(ed, text, nth, searchBackwards)
-      return
+  end
+  return pos
+end
+  
+-- used with f and F cmds so far 
+function searchForAndGoto(ed, text, nth, searchBackwards, redo)
+  local pos = 0
+  nth = nth or 1
+  for i = 1, nth do
+    pos = find(ed, text, searchBackwards, redo)
+    if pos == wxstc.wxSTC_INVALID_POSITION then 
+      return wxstc.wxSTC_INVALID_POSITION
     end
   end
+  gotoPosition(ed, pos)
+  return pos
 end
 
 function hasSelection(editor)
@@ -331,28 +352,66 @@ local function setBlockCaret(ed)
   end
 end
 
+
+
 ----------------------------------------------------------------------------------------------------
 -- vim commands and logic
 ----------------------------------------------------------------------------------------------------
 cmds = {}
 
--- rough copy of cmd structure used by neovim to keep things extendable
+-- rough copies of structures used by neovim to keep things extendable
+-- only cmd used just now, but any future direction should be towards these.
+local kMT = { 
+  CharWise = 0,     --< character-wise movement/register
+  LineWise = 1,     --< line-wise movement/register
+  BlockWise = 2,    --< block-wise movement/register
+  Unknown = -1      --< Unknown or invalid motion type
+} -- MotionType
+
+cmds.newOperator = function()
+  local op = {
+    op_type = "",                  -- current pending operator type
+    regname = 0,                   -- register to use for the operator
+    motion_type = kMT.CharWise,    -- type of the current cursor motion
+    motion_force = "",             -- force motion type: 'v', 'V' or CTRL-V
+    use_reg_one = false,           -- true if delete uses reg 1 even when not
+                                   -- linewise
+    inclusive = false,             -- true if char motion is inclusive (only
+                                   -- valid when motion_type is kMTCharWise)
+    end_adjusted = false,          -- backuped b_op_end one char (only used by
+                                   -- do_format())
+    startPos = 0,                  -- start of the operator
+    endPos = 0,                    -- end of the operator
+    cursor_start = 0,              -- cursor position before motion for "gw"
+    line_count = 0,                -- number of lines from op_start to op_end
+                                   -- (inclusive)
+    empty = false,                 -- op_start and op_end the same (only used by
+                                   -- op_change())
+    isVisual = false,              -- operator on Visual area
+    --start_vcol = 0,              -- start col for block mode operator
+    --end_vcol = 0,                -- end col for block mode operator
+    prev_opcount = 0,              -- ca.opcount saved for K_EVENT
+    prev_count0 = 0                -- ca.count0 saved for K_EVENT
+  }
+  return op
+end
+
 cmds.newCommand = function(searchbuf)
   local cmd = {
-    opargs = nil,            -- operator arguments
-    prechar = "",            -- prefix character (optional, always 'g')
-    cmdchar = "",            -- command character
-    nchar = "",              -- next command character (optional)
-    ncharC1 = "",            -- first composing character (optional) 
-    ncharC2 = "",            -- second composing character (optional)
-    extrachar = "",          -- yet another character (optional) 
-    opcount = 0,             -- count before an operator
-    count1 = 0,              -- count before command, default 0
-    count2 = 0,              -- count before command, default 1
-    arg = "",                -- extra argument from nv_cmds[]
-    retval = nil,            -- return: CA_* values
-    searchbuf = {},          -- return: pointer to search pattern or NULL
-    origPos = nil            -- pos in document before execution
+    op = cmds.newOperator(),   -- operator arguments
+    prechar = "",              -- prefix character (optional, always 'g')
+    cmdchar = "",              -- command character
+    nchar = "",                -- next command character (optional)
+    ncharC1 = "",              -- first composing character (optional) 
+    ncharC2 = "",              -- second composing character (optional)
+    extrachar = "",            -- yet another character (optional) 
+    opcount = 0,               -- count before an operator
+    count1 = 0,                -- count before command, default 0
+    count2 = 0,                -- count before command, default 1
+    arg = "",                  -- extra argument from nv_cmds[]
+    retval = nil,              -- return: CA_* values
+    searchbuf = {},            -- return: pointer to search pattern or NULL
+    origPos = nil              -- pos in document before execution
   }
   return cmd
 end
@@ -385,19 +444,20 @@ end
 cmds.cmdNeedsSecondChar = function(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
-         cmdKey == "y" or cmdKey == "f" or cmdKey == "F"
+         cmdKey == "y" or cmdKey == "f" or cmdKey == "F" or
+         cmdKey == "i"
 end
 
 -- these commands treat numbers as chars, so check with this
 cmds.cmdTakesNumberAsChar = function(cmdKey)
-  return cmdKey == "f" or cmdKey == "F"
+  return cmdKey == "f" or cmdKey == "F" or cmdKey == "m" or cmdKey == "'"
 end
 
 -- called from key event, calls execute when cmd has valid structure
 cmds.validateAndExecute = function(editor, cmd)
   if cmd.cmdchar ~= "" then 
     if cmd.nchar == "" then
-      if cmds.motions[cmd.cmdchar] then
+      if cmds.motions[cmd.cmdchar] and cmd.cmdchar ~= "i" then
         if cmds.motions.needArgs[cmd.cmdchar] and cmd.arg == "" then 
           cmds.motions.requireNextChar = true 
           return false 
@@ -405,7 +465,8 @@ cmds.validateAndExecute = function(editor, cmd)
         cmds.motions.execute(cmd.cmdchar, editor, math.max(1, cmd.count1))
         return true
       --is not motion
-      elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) or isModeVisual(editMode) then
+      elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) or isModeVisual(editMode)
+                or cmd.cmdchar == "i" then
         if cmds.operators[cmd.cmdchar] then
           cmds.execute(cmd, cmd.count1, editor, nil, false, false)
         else
@@ -422,6 +483,10 @@ cmds.validateAndExecute = function(editor, cmd)
           cmds.execute(cmd, cmd.count1, editor, nil, false, false)
           return true
         elseif cmds.motions[cmd.nchar] then
+          if cmds.motions.needArgs[cmd.nchar] and cmd.arg == "" then
+            cmds.motions.requireNextChar = true 
+            return false
+          end
           cmds.execute(cmd, cmd.count1, editor, math.max(cmd.count2, 1), false, true)
           return true
         else
@@ -490,11 +555,19 @@ cmds.motions = {
                                    ed:MarkerDefine(86, wxstc.wxSTC_MARK_DOTDOTDOT) end,
   ["'"]       = function(ed, reps) if cmd.arg == "'" or markers[cmd.arg] == nil then return end
                                    local line = ed:MarkerLineFromHandle(markers[cmd.arg])
-                                   gotoPosition(ed, ed:PositionFromLine(line)) end
+                                   gotoPosition(ed, ed:PositionFromLine(line)) end,
+  ["i"]       = function(ed, reps) local m = match[cmd.arg] ; local left, right
+                                   left = m and m.left or cmd.arg
+                                   right = m and m.right or cmd.arg                            
+                                   cmd.origPos = find(ed, left, true) + 1
+                                   local dest = find(ed, right, false)
+                                   gotoPosition(ed, dest) -- TODO: make 'i' motion work with visual mode
+                                   cmd.keepSpaces = true
+                                   end
 }
 
 cmds.motions.needArgs = {
-  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true
+  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true, ["i"] = true
 }
 
 -- this is checked for in onEditorKeyDown - cmd.arg gets the next char
@@ -542,7 +615,7 @@ cmds.general = {
   ["a"]      = function(ed, num) setMode(kEditMode.insert, false) end,
   ["A"]      = function(ed, num) ed:LineEnd() ; setMode(kEditMode.insert, false) end,
   ["R"]      = function(ed, num) setMode(kEditMode.insert, true) end,
-  ["gg"]     = function(ed, num) callExtendableFunc(ed, "DocumentStart", num) end,
+  ["gg"]     = function(ed, num) callExtendableFunc(ed, "DocumentStart", 1) end,
   ["gt"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
                                   ID.NOTEBOOKTABNEXT)) end,
   ["gT"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
@@ -550,7 +623,7 @@ cmds.general = {
   ["G"]      = function(ed, num) if num > 0 then
                                    gotoPosition(ed, ed:PositionFromLine(num - 1))
                                  else
-                                   callExtendableFunc(ed, "DocumentEnd", num)
+                                   callExtendableFunc(ed, "DocumentEnd", 1)
                                  end ; end,
   ["o"]      = function(ed, num) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
                                  ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
@@ -604,12 +677,11 @@ local function _DBGCMD()
   _DBG("------------------------------------------")
 end
   
-local function resetCmd()
+function resetCmd()
   cmdLast = shallowcopy(cmd)
-  _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
   cmd = cmds.newCommand()
-  _DBG("cmdLast.cmdchar: ", cmdLast.cmdchar)
 end
+
 ----------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------
 -- implement returned plugin object inc event handlers here
@@ -617,7 +689,7 @@ local plugin = {
   name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
-  version = "0.5",
+  version = "0.52",
   dependencies = "1.61",
   
 ----------------------------------------------------------------------------------------------------
@@ -625,6 +697,7 @@ local plugin = {
     setMode(kEditMode.insert)
     cmd = cmds.newCommand()
     ide:SetStatus("Press 'Escape' to enter Vim editing mode")
+    _DBG(os.setlocale(nil))
   end,
 
 ----------------------------------------------------------------------------------------------------
@@ -635,10 +708,11 @@ local plugin = {
     
     key = keymap.keyNumToChar(keyNum)
     
-    if cmds.motions.requireNextChar and not keymap.isKeyModifier(keyNum) then 
-      cmd.arg = tostring(key)
+    if cmds.motions.requireNextChar and not keymap.isKeyModifier(keyNum) then
       cmds.motions.requireNextChar = false
-      --_DBGCMD()
+      if keyNum == 27 then resetCmd() return false end
+      cmd.arg = tostring(key)
+      _DBGCMD()
       if cmds.validateAndExecute(editor, cmd) then 
         resetCmd()
       end
@@ -744,7 +818,7 @@ local plugin = {
     else
       cmd.nchar = key
     end
-    --_DBGCMD()
+    _DBGCMD()
     if cmds.validateAndExecute(editor, cmd) then 
       resetCmd()
     end
