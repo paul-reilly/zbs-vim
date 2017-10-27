@@ -134,11 +134,12 @@ local luaSectionKeywords = { ["local function"] = "local function", ["function"]
                              ["while"] = "while", ["for"] = "for", ["if"] = "if", 
                              ["repeat"] = "repeat" }
 
-local m_brace = { left = "{", right = "}" }
+local m_brace   = { left = "{", right = "}" }
 local m_bracket = { left = "(", right = ")" }
-local m_square = { left = "[", right = "]" }
-local match = { ["{"] = m_brace,  ["}"] = m_brace, ["("] = m_bracket, [")"] = m_bracket, 
-                ["["] = m_square, ["]"] = m_square }
+local m_square  = { left = "[", right = "]" }
+local m_angle   = { left = "<", right = ">" }
+local match = { ["{"] = m_brace,  ["}"] = m_brace,  ["("] = m_bracket, [")"] = m_bracket, 
+                ["["] = m_square, ["]"] = m_square, ["<"] = m_angle,   [">"] = m_angle }
 
 
 ----------------------------------------------------------------------------------------------------
@@ -260,7 +261,6 @@ end
 -- called before executing a cmd, so that selection is correct
 -- for wx Cut/Copy methods
 function setCmdSelection(ed, cmd, wordwise, linewise)
-  _DBG("setCmdSelection")
   if linewise then cmds.motions.execute("j", ed, math.max(0,cmd.count1 - 1)) end
   setSelectionFromPositions(ed, ed:GetCurrentPos(), cmd.origPos)
   if linewise then
