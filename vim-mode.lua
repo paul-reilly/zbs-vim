@@ -625,11 +625,10 @@ cmds.general = {
                                  else
                                    callExtendableFunc(ed, "DocumentEnd", 1)
                                  end ; end,
-  ["o"]      = function(ed, num) ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
-                                 ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
-  ["O"]      = function(ed, num) ed:LineUp()
-                                 ed:InsertText(ed:GetLineEndPosition(ed:GetCurrentLine()), "\13\10") 
-                                 ed:LineDown() ; setMode(kEditMode.insert, false) ; end,
+  ["o"]      = function(ed, num) ed:LineEnd() ; ed:NewLine() 
+                                 setMode(kEditMode.insert, false) ; end,
+  ["O"]      = function(ed, num) ed:Home() ; ed:NewLine() ; ed:LineUp() ;
+                                 setMode(kEditMode.insert, false) ; end,
   ["Y"]      = function(ed, num) cmd.cmdchar = "y"
                                  cmds.execute(cmd, num, ed, nil, true, false) end,
   ["p"]      = function(ed, num) for i=1, math.min(math.max(num, 1), _MAX_REPS) do 
