@@ -290,8 +290,6 @@ local function gotoPosition(ed, pos)
   end
 end
 
-local searchForAndGoto
-
 local function find(ed, text, searchBackwards, redo)
   local extend = isModeVisual(editMode)
   local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD  
@@ -445,7 +443,7 @@ cmds.cmdNeedsSecondChar = function(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
          cmdKey == "y" or cmdKey == "f" or cmdKey == "F" or
-         cmdKey == "i"
+         cmdKey == "i" or cmdKey == "i"
 end
 
 -- these commands treat numbers as chars, so check with this
@@ -457,8 +455,9 @@ end
 cmds.validateAndExecute = function(editor, cmd)
   if cmd.cmdchar ~= "" then 
     if cmd.nchar == "" then
-      if cmds.motions[cmd.cmdchar] and cmd.cmdchar ~= "i" then
-        if cmds.motions.needArgs[cmd.cmdchar] and cmd.arg == "" then 
+      -- 'i' and 'a' motions are not standalone actions
+      if cmds.motions[cmd.cmdchar] and cmd.cmdchar ~= "i" and cmd.cmdchar ~= "a" then
+        if cmd.arg == "" and cmds.motions.needArgs[cmd.cmdchar] then 
           cmds.motions.requireNextChar = true 
           return false 
         end
@@ -466,11 +465,10 @@ cmds.validateAndExecute = function(editor, cmd)
         return true
       --is not motion
       elseif not cmds.cmdNeedsSecondChar(cmd.cmdchar) or isModeVisual(editMode)
-                or cmd.cmdchar == "i" then
+                or cmd.cmdchar == "i" or cmd.cmdchar == "a" then
         if cmds.operators[cmd.cmdchar] then
           cmds.execute(cmd, cmd.count1, editor, nil, false, false)
         else
-          _DBG("Performed from command table!")
           cmds.general.execute(cmd.prechar .. cmd.cmdchar, editor, cmd.count1)
         end
         return true
@@ -556,18 +554,28 @@ cmds.motions = {
   ["'"]       = function(ed, reps) if cmd.arg == "'" or markers[cmd.arg] == nil then return end
                                    local line = ed:MarkerLineFromHandle(markers[cmd.arg])
                                    gotoPosition(ed, ed:PositionFromLine(line)) end,
+  -- TODO: make 'i' and 'a' motion work with visual mode
   ["i"]       = function(ed, reps) local m = match[cmd.arg] ; local left, right
                                    left = m and m.left or cmd.arg
                                    right = m and m.right or cmd.arg                            
                                    cmd.origPos = find(ed, left, true) + 1
                                    local dest = find(ed, right, false)
-                                   gotoPosition(ed, dest) -- TODO: make 'i' motion work with visual mode
+                                   gotoPosition(ed, dest) 
+                                   cmd.keepSpaces = true
+                                   end,
+  ["a"]       = function(ed, reps) local m = match[cmd.arg] ; local left, right
+                                   left = m and m.left or cmd.arg
+                                   right = m and m.right or cmd.arg                            
+                                   cmd.origPos = find(ed, left, true)
+                                   local dest = find(ed, right, false) + 1
+                                   gotoPosition(ed, dest)
                                    cmd.keepSpaces = true
                                    end
 }
 
 cmds.motions.needArgs = {
-  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true, ["i"] = true
+  ["f"] = true, ["F"] = true, ["m"] = true, ["'"] = true, 
+  ["i"] = true, ["a"] = true
 }
 
 -- this is checked for in onEditorKeyDown - cmd.arg gets the next char
