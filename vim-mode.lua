@@ -36,23 +36,22 @@
 local DEBUG = false
 local _DBG -- (...) for console output, definition at EOF
 
--- forward declarations of function variables
+-- forward declarations of functions
 local hasSelection
-local selectCurrentLine
 local setCaret
 local resetCmd
-local cmds = {}
-local markers = {}
+local searchForAndGoto
 
-local editMode = nil
--- bound repetitions of some functions to this value
--- to avoid pasting stuff 100,000 times or whatever
-local _MAX_REPS = 50 
-local curEditor = nil -- set in onEditorKeyDown
-local selectionAnchor = 0
-
-local cmd -- initialised in onRegister
-local cmdLast
+-- our global(ish) variables
+local cmds = {}           -- holds tables and methods for executing commands
+local markers = {}        -- table to store wx marker ID and associated Vim char
+local editMode = nil      -- current edit mode, insert/visual type
+local _MAX_REPS = 50      -- bound repetitions of some functions to this value
+                          -- to avoid pasting stuff 100,000 times or whatever
+local curEditor = nil     -- wx editor to target, set in onEditorKeyDown
+local selectionAnchor = 0 -- used in visual mode
+local cmd                 -- current command, initialised in onRegister
+local cmdLast             -- last command
 
 ----------------------------------------------------------------------------------------------------
 local keymap = {}
@@ -69,6 +68,7 @@ keymap.shift = {["0"] = ")", ["1"] = "!", ["2"]  = "\"", ["3"] = "£", ["4"] = "
                 ["/"] = "?"
 }
 
+-- key codes to other keys
 keymap.sys = {["8"]   = "BS",   ["9"]   = "TAB",   ["92"]  = "\\",   ["127"] = "DEL",     
               ["312"] = "END",  ["313"] = "HOME",  ["314"] = "LEFT", ["315"] = "UP",   
               ["316"] = "RIGHT",["317"] = "DOWN",  ["366"] = "PGUP", ["367"] = "PGDOWN"}
@@ -125,8 +125,8 @@ keymap.overrideHotKeys = function(overrideNotRestore)
 end
 
 ----------------------------------------------------------------------------------------------------
-local kEditMode = { normal = "Normal", visual = "Visual", visualBlock = "Visual - Block",
-                    visualLine = "Visual - Line",
+local kEditMode = { normal = "Normal",             visual = "Visual", 
+                    visualLine = "Visual - Line",  visualBlock = "Visual - Block",
                     insert = "Insert - ZeroBrane", commandLine = "Command Line" }
 
 -- for the Lua equivalent of brace matching with 'end's at some point
@@ -138,8 +138,8 @@ local m_brace   = { left = "{", right = "}" }
 local m_bracket = { left = "(", right = ")" }
 local m_square  = { left = "[", right = "]" }
 local m_angle   = { left = "<", right = ">" }
-local match = { ["{"] = m_brace,  ["}"] = m_brace,  ["("] = m_bracket, [")"] = m_bracket, 
-                ["["] = m_square, ["]"] = m_square, ["<"] = m_angle,   [">"] = m_angle }
+local match     = { ["{"] = m_brace,  ["}"] = m_brace,  ["("] = m_bracket, [")"] = m_bracket, 
+                    ["["] = m_square, ["]"] = m_square, ["<"] = m_angle,   [">"] = m_angle }
 
 
 ----------------------------------------------------------------------------------------------------
