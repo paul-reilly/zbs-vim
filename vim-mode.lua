@@ -1,6 +1,6 @@
 --            MIT Copyright 2017 Paul Reilly (https://opensource.org/licenses/MIT)
---   
---   
+--
+--
 --     ::::::::: :::::::::   ::::::::                :::     ::: ::::::::::: ::::    ::::  
 --          :+:  :+:    :+: :+:    :+:               :+:     :+:     :+:     +:+:+: :+:+:+ 
 --         +:+   +:+    +:+ +:+                      +:+     +:+     +:+     +:+ +:+:+ +:+ 
@@ -41,6 +41,7 @@ local hasSelection
 local setCaret
 local resetCmd
 local searchForAndGoto
+local setCmdSelection
 
 -- our global(ish) variables
 local cmds = {}           -- holds tables and methods for executing commands
@@ -85,7 +86,7 @@ keymap.keyNumToChar = function(keyNum)
     end
   else
     if keyNum >= 32 and keyNum <= 126 then
-      key = string.char(keyNum)
+      local key = string.char(keyNum)
       if not wx.wxGetKeyState(wx.WXK_SHIFT) then 
         return key:lower()
       else
@@ -101,23 +102,22 @@ keymap.isKeyModifier = function(keyNum)
 end
 
 keymap.hotKeysToOverride = {
-  { sc = "Ctrl+r", act = function() curEditor:Redo() end,                                 id = nil },
-  { sc = "Ctrl+v", act = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
+ { sc = "Ctrl+r", act = function() curEditor:Redo() end,                                 id = nil },
+ { sc = "Ctrl+v", act = function() cmds.general.execute("v+Ctrl", curEditor, false) end, id = nil }
 }
 
 keymap.overrideHotKeys = function(overrideNotRestore)
   if overrideNotRestore then
-    for k, v in pairs(keymap.hotKeysToOverride) do
-      local sc -- shortcut
+    for _, v in pairs(keymap.hotKeysToOverride) do
       if v.id == nil then 
-        v.id, sc = ide:GetHotKey(v.sc) 
+        v.id, _ = ide:GetHotKey(v.sc) 
         if v.id == nil then ide:Print("Could not get hot key.") return end
       end
       local ret = ide:SetHotKey(v.act, v.sc)
       if ret == nil then ide:Print("Cannot set shortcut: ".. v.sc) end
     end
   else
-    for k, v in pairs(keymap.hotKeysToOverride) do
+    for _, v in pairs(keymap.hotKeysToOverride) do
       local ret = ide:SetHotKey(v.id, v.sc)
       if ret == nil then ide:Print("Cannot set shortcut: ".. v.sc) end
     end
@@ -143,7 +143,7 @@ local match     = { ["{"] = m_brace,  ["}"] = m_brace,  ["("] = m_bracket, [")"]
 
 
 ----------------------------------------------------------------------------------------------------
-function shallowcopy(orig)
+local function shallowcopy(orig)
   local orig_type = type(orig)
   local copy
   if orig_type == 'table' then
@@ -234,20 +234,21 @@ local function callExtendableFunc(obj, name, reps, canRectExtend)
   cmd.origPos = curEditor:GetCurrentPos()
   local extend = ""
   if isModeVisual(editMode) then
-    if editMode == (kEditMode.visualBlock or editMode == kEditMode.visualLine) and canRectExtend then
+    if editMode == (kEditMode.visualBlock or editMode == kEditMode.visualLine) 
+                                          and canRectExtend then
       extend = "RectExtend"
     else
       extend = "Extend"
     end
   end
   reps = reps or 1
-  for i = 1, reps do
+  for _ = 1, reps do
     obj[name .. extend](obj)
   end
   return canRectExtend
 end
 
-function setSelectionFromPositions(ed, pos1, pos2)
+local function setSelectionFromPositions(ed, pos1, pos2)
   local min = math.min(pos1, pos2)
   ed:SetSelectionStart(min)
   ed:SetSelectionEnd(math.max(pos1, pos2))
@@ -291,9 +292,8 @@ local function gotoPosition(ed, pos)
 end
 
 local function find(ed, text, searchBackwards, redo)
-  local extend = isModeVisual(editMode)
   local flags = wxstc.wxSTC_FIND_MATCHCASE -- wxstc.wxSTC_FIND_WHOLEWORD  
-  minPos = redo == nil and ed:GetCurrentPos() or redo
+  local minPos = redo == nil and ed:GetCurrentPos() or redo
   local maxPos = searchBackwards and 0 or ed:GetLength()
   local pos = ed:FindText(minPos, maxPos, text, flags)
   if pos ~= wxstc.wxSTC_INVALID_POSITION then
@@ -312,7 +312,7 @@ end
 function searchForAndGoto(ed, text, nth, searchBackwards, redo)
   local pos = 0
   nth = nth or 1
-  for i = 1, nth do
+  for _ = 1, nth do
     pos = find(ed, text, searchBackwards, redo)
     if pos == wxstc.wxSTC_INVALID_POSITION then 
       return wxstc.wxSTC_INVALID_POSITION
@@ -338,7 +338,6 @@ local function setBlockCaret(ed)
     local anchorColumn = ed:GetColumn(selectionAnchor)
     local posColumn = ed:GetColumn(ed:GetCurrentPos())
     local caretRHS = posColumn >= anchorColumn
-    local numSelections = ed:GetSelections()
     for i = ed:GetSelections() - 1, 0, -1 do
       local sel = ed:GetColumn(ed:GetSelectionNCaret(i))
       -- only keep lines selected that have content within the block here
@@ -429,7 +428,6 @@ cmds.execute = function(cmd, cmdReps, editor, motionReps, linewise, doMotion)
   end
   editor:BeginUndoAction()
   local iters = math.max(cmdReps, 1)
-  local final = false
   for i = 1, iters do
     if doMotion then cmds.motions[cmd.nchar](editor, motionReps) end
     if i == iters then
@@ -620,14 +618,14 @@ cmds.general = {
   ["v+Ctrl"] = function(ed, num) setMode(kEditMode.visualBlock, false) end,
   ["i"]      = function(ed, num) setMode(kEditMode.insert, false) end,
   ["I"]      = function(ed, num) ed:Home() ; setMode(kEditMode.insert, false) end,
-  ["a"]      = function(ed, num) setMode(kEditMode.insert, false) end,
+  ["a"]      = function(ed, num) ed:CharRight() ; setMode(kEditMode.insert, false) end, 
   ["A"]      = function(ed, num) ed:LineEnd() ; setMode(kEditMode.insert, false) end,
   ["R"]      = function(ed, num) setMode(kEditMode.insert, true) end,
   ["gg"]     = function(ed, num) callExtendableFunc(ed, "DocumentStart", 1) end,
-  ["gt"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
-                                  ID.NOTEBOOKTABNEXT)) end,
-  ["gT"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(wx.wxEVT_COMMAND_MENU_SELECTED,
-                                  ID.NOTEBOOKTABPREV)) end,
+  ["gt"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(
+                                 wx.wxEVT_COMMAND_MENU_SELECTED, ID.NOTEBOOKTABNEXT)) end,
+  ["gT"]     = function(ed, num) ide.frame:AddPendingEvent(wx.wxCommandEvent(
+                                 wx.wxEVT_COMMAND_MENU_SELECTED, ID.NOTEBOOKTABPREV)) end,
   ["G"]      = function(ed, num) if num > 0 then
                                    gotoPosition(ed, ed:PositionFromLine(num - 1))
                                  else
@@ -639,10 +637,10 @@ cmds.general = {
                                  setMode(kEditMode.insert, false) ; end,
   ["Y"]      = function(ed, num) cmd.cmdchar = "y"
                                  cmds.execute(cmd, num, ed, nil, true, false) end,
-  ["p"]      = function(ed, num) for i=1, math.min(math.max(num, 1), _MAX_REPS) do 
+  ["p"]      = function(ed, num) for _=1, math.min(math.max(num, 1), _MAX_REPS) do 
                                    ed:Paste() 
                                  end ; end,
-  ["u"]      = function(ed, num) for i=1, math.max(num, 1) do ed:Undo() end ; end,
+  ["u"]      = function(ed, num) for _=1, math.max(num, 1) do ed:Undo() end ; end,
   ["zz"]     = function(ed, num) ed:VerticalCentreCaret() end,
   ["z."]     = function(ed, num) ed:VerticalCentreCaret() end,
   ["zt"]     = function(ed, num) ed:SetFirstVisibleLine(ed:GetCurrentLine()) ; end,
@@ -653,9 +651,9 @@ cmds.general = {
                                    cmd = cmdLast
                                    cmds.validateAndExecute(ed, cmd)
                                  end ; end,
-  ["DEL"]    = function(ed, num) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
+  ["DEL"]    = function(ed, num) if hasSelection(ed) then ed:Cut() else local pos = ed:GetCurrentPos()
                                  ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
-  ["x"]      = function(ed, num) if hasSelection(ed) then ed:Cut() else pos = ed:GetCurrentPos()
+  ["x"]      = function(ed, num) if hasSelection(ed) then ed:Cut() else local pos = ed:GetCurrentPos()
                                  ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
   ["#"]      = function(ed, num) openRealVim(ed) end,
 }
@@ -683,7 +681,7 @@ local function _DBGCMD()
   _DBG("cmd.arg: ", "'" .. cmd.arg .. "'")
   _DBG("------------------------------------------")
 end
-  
+
 function resetCmd()
   cmdLast = shallowcopy(cmd)
   cmd = cmds.newCommand()
@@ -709,6 +707,7 @@ local package = {
 
 ----------------------------------------------------------------------------------------------------
   onEditorKeyDown = function(self, editor, event)
+    if DEBUG then require('mobdebug').on() end
     curEditor = editor
     local key =  tostring(event:GetKeyCode())
     local keyNum = tonumber(key)
@@ -775,10 +774,11 @@ local package = {
       return false
     end
 
-    ------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------------------
     -- not command line, remap key if required
     if keymap.user[key] then key = keymap.user[key] end
-    
+
     ------------------------------------------------------------------------------------------------
     --    Normal/Visual Modes 
     if keyNum == 27 then setMode(kEditMode.normal) ; cmd = cmds.newCommand() return false end
@@ -839,11 +839,12 @@ local package = {
   onEditorLoad = function(self, editor) setCaret(editor) end,
   onEditorNew = function(self, editor) setCaret(editor) end,
   onEditorFocusSet = function(self, editor) setCaret(editor) end
+  
 }
 
 function _DBG(...)
   if DEBUG then 
-    local msg = "" for k,v in ipairs{...} do msg = msg .. tostring(v) .. "\t" end ide:Print(msg)
+    local msg = "" for _,v in ipairs{...} do msg = msg .. tostring(v) .. "\t" end ide:Print(msg)
   end
 end
 
