@@ -691,8 +691,8 @@ end
 
 ----------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------
--- implement returned plugin object inc event handlers here
-local plugin = {
+-- implement returned package object inc event handlers here
+local package = {
   name = "Vim",
   description = "Vim-like editing for ZBS.",
   author = "Paul Reilly",
@@ -847,4 +847,4 @@ function _DBG(...)
   end
 end
 
-return plugin
+return package
