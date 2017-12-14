@@ -602,19 +602,19 @@ end
 
 cmds.operators = {
   ["d"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
-                                  ed:Cut() cancelSelection(ed) ; end,
+                                  ed:DeleteBack() cancelSelection(ed) ; end,
   ["c"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
-                                  ed:Cut() 
+                                  ed:DeleteBack()
                                   if linewise then
                                     cmds.general.execute("O", ed, 1)
-                                  else 
-                                    setMode(kEditMode.insert) 
+                                  else
+                                    setMode(kEditMode.insert)
                                   end ; end,
   ["y"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
                                   ed:Copy() cancelSelection(ed) ; end,
   ["x"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
                                   ed:Cut() ; cancelSelection(ed) ; end,
-}  
+}
 
 ----------------------------------------------------------------------------------------------------
 cmds.general = {
@@ -656,8 +656,12 @@ cmds.general = {
                                    cmd = cmdLast
                                    cmds.validateAndExecute(ed, cmd)
                                  end ; end,
-  ["DEL"]    = function(ed, num) if hasSelection(ed) then ed:Cut() else local pos = ed:GetCurrentPos()
-                                 ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
+  ["DEL"]    = function(ed, num) if hasSelection(ed) then
+                                   ed:DeleteBack()
+                                 else
+                                   local pos = ed:GetCurrentPos()
+                                   ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS))
+                                 end end,
   ["x"]      = function(ed, num) if hasSelection(ed) then ed:Cut() else local pos = ed:GetCurrentPos()
                                  ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
   ["#"]      = function(ed, num) openRealVim(ed) end,
@@ -688,8 +692,11 @@ local function _DBGCMD()
 end
 
 function resetCmd()
-  cmdLast = shallowcopy(cmd)
-  cmd = cmds.newCommand()
+  -- preserve last command if just navigating
+  if not cmds.motions[cmd.char] then
+    cmdLast = shallowcopy(cmd)
+    cmd = cmds.newCommand()
+  end
 end
 
 ----------------------------------------------------------------------------------------------------
