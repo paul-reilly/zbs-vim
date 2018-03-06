@@ -444,7 +444,7 @@ cmds.cmdNeedsSecondChar = function(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
          cmdKey == "y" or cmdKey == "f" or cmdKey == "F" or
-         cmdKey == "i" or cmdKey == "i"
+         cmdKey == "i" or cmdKey == "i" or cmdKey == "x"
 end
 
 -- these commands treat numbers as chars, so check with this
