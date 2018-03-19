@@ -444,7 +444,7 @@ cmds.cmdNeedsSecondChar = function(cmdKey)
   if isModeVisual(editMode) then return false end
   return cmdKey == "c" or cmdKey == "d" or cmdKey == "z" or
          cmdKey == "y" or cmdKey == "f" or cmdKey == "F" or
-         cmdKey == "i" or cmdKey == "i" or cmdKey == "x"
+         cmdKey == "i" or cmdKey == "i"
 end
 
 -- these commands treat numbers as chars, so check with this
@@ -612,8 +612,6 @@ cmds.operators = {
                                   end ; end,
   ["y"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
                                   ed:Copy() cancelSelection(ed) ; end,
-  ["x"]  = function(ed, linewise) setCmdSelection(ed, cmd, true, linewise)
-                                  ed:Cut() ; cancelSelection(ed) ; end,
 }
 
 ----------------------------------------------------------------------------------------------------
@@ -660,10 +658,14 @@ cmds.general = {
                                    ed:DeleteBack()
                                  else
                                    local pos = ed:GetCurrentPos()
+                                   ed:DeleteRange(pos, 1)
+                                 end end,
+  ["x"]      = function(ed, num) if hasSelection(ed) then
+                                   ed:Cut()
+                                 else
+                                   local pos = ed:GetCurrentPos()
                                    ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS))
                                  end end,
-  ["x"]      = function(ed, num) if hasSelection(ed) then ed:Cut() else local pos = ed:GetCurrentPos()
-                                 ed:DeleteRange(pos, math.min(math.max(num, 1), _MAX_REPS)) end end,
   ["#"]      = function(ed, num) openRealVim(ed) end,
 }
 
